@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ponto Eletrônico — Python + Supabase</title>
+    <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script defer src="/static/js/app.js"></script>
+    <script defer>
+      window.__SUPABASE_URL__ = "{{ supabase_url }}";
+      window.__SUPABASE_ANON_KEY__ = "{{ supabase_anon_key }}";
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+  </head>
+  <body class="bg-gray-50 min-h-screen">
+    <div class="max-w-3xl mx-auto p-6 space-y-6">
+      <header class="flex items-center justify-between">
+        <h1 class="text-2xl font-bold">Ponto Eletrônico</h1>
+        <div id="auth-area" class="space-x-2">
+          <button id="btn-login" class="px-3 py-1 rounded bg-black text-white">Entrar</button>
+          <button id="btn-logout" class="hidden px-3 py-1 rounded bg-gray-200">Sair</button>
+        </div>
+      </header>
+
+      <section id="user-info" class="hidden bg-white p-4 rounded shadow">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm text-gray-500">Logado como</p>
+            <p id="user-email" class="font-medium"></p>
+          </div>
+          <div class="space-x-2">
+            <button data-type="in" class="btn-punch px-3 py-1 rounded bg-green-600 text-white">Entrada</button>
+            <button data-type="out" class="btn-punch px-3 py-1 rounded bg-red-600 text-white">Saída</button>
+            <button data-type="break_start" class="btn-punch px-3 py-1 rounded bg-yellow-500 text-white">Pausa</button>
+            <button data-type="break_end" class="btn-punch px-3 py-1 rounded bg-blue-600 text-white">Voltar</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="map-card" class="hidden bg-white p-4 rounded shadow">
+        <h2 class="font-semibold mb-2">Últimas batidas (mapa)</h2>
+        <div id="map" style="height: 280px;"></div>
+      </section>
+
+      <section id="punches-card" class="hidden bg-white p-4 rounded shadow">
+        <h2 class="font-semibold mb-2">Últimas batidas (lista)</h2>
+        <ul id="punches" class="space-y-2 text-sm"></ul>
+      </section>
+    </div>
+  </body>
+</html>
