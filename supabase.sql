@@ -1,9 +1,9 @@
--- ============================================================
--- Ponto Eletrônico — Correções gerais (funções, triggers, RLS)
--- Rode este bloco inteiro no Supabase
--- ============================================================
+-- ===========================================
+-- Ponto Eletrônico — Schema completo (idempotente)
+-- Inclui: enums, tabelas, índices, triggers, RLS, approval
+-- ===========================================
 
--- ---------- (A) Garantir enums (ignora se já existem) ----------
+-- Enums
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
@@ -20,7 +20,15 @@ BEGIN
 END
 $$;
 
--- ---------- (B) Tabelas (idempotentes) ----------
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'punch_approval_status') THEN
+    CREATE TYPE public.punch_approval_status AS ENUM ('pending','approved','rejected');
+  END IF;
+END
+$$;
+
+-- Tabelas
 CREATE TABLE IF NOT EXISTS public.profiles (
   id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   full_name text,
@@ -42,11 +50,18 @@ CREATE TABLE IF NOT EXISTS public.punches (
   created_by uuid REFERENCES public.profiles(id),
   created_at timestamptz NOT NULL DEFAULT now(),
   edited_by uuid REFERENCES public.profiles(id),
-  edited_at timestamptz
+  edited_at timestamptz,
+  -- aprovação
+  approval_status public.punch_approval_status NOT NULL DEFAULT 'pending',
+  approved_by uuid REFERENCES public.profiles(id),
+  approved_at timestamptz
 );
 
 CREATE INDEX IF NOT EXISTS idx_punches_user_time
   ON public.punches (user_id, occurred_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_punches_status ON public.punches (approval_status);
+CREATE INDEX IF NOT EXISTS idx_punches_user_status ON public.punches (user_id, approval_status);
 
 CREATE TABLE IF NOT EXISTS public.punch_audit (
   id bigserial PRIMARY KEY,
@@ -58,16 +73,13 @@ CREATE TABLE IF NOT EXISTS public.punch_audit (
   at timestamptz NOT NULL DEFAULT now()
 );
 
--- ---------- (C) Funções auxiliares ----------
+-- Funções auxiliares
 CREATE OR REPLACE FUNCTION public.is_admin(uid uuid)
 RETURNS boolean
 LANGUAGE sql
 STABLE
 AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM public.profiles p
-    WHERE p.id = uid AND p.role = 'admin'
-  );
+  SELECT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = uid AND p.role = 'admin');
 $$;
 
 CREATE OR REPLACE FUNCTION public.is_manager_of(manager uuid, employee uuid)
@@ -75,15 +87,10 @@ RETURNS boolean
 LANGUAGE sql
 STABLE
 AS $$
-  SELECT EXISTS (
-    SELECT 1
-    FROM public.profiles e
-    WHERE e.id = employee
-      AND e.manager_id = manager
-  );
+  SELECT EXISTS (SELECT 1 FROM public.profiles e WHERE e.id = employee AND e.manager_id = manager);
 $$;
 
--- ---------- (D) Anti-duplicação (antes do INSERT em punches) ----------
+-- Anti-duplicação (5 minutos)
 CREATE OR REPLACE FUNCTION public.prevent_punch_spam()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -106,7 +113,7 @@ BEFORE INSERT ON public.punches
 FOR EACH ROW
 EXECUTE FUNCTION public.prevent_punch_spam();
 
--- ---------- (E) Auditoria (agora SECURITY DEFINER para ignorar RLS) ----------
+-- Auditoria (SECURITY DEFINER para ignorar RLS)
 CREATE OR REPLACE FUNCTION public.audit_punch()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -140,7 +147,7 @@ AFTER INSERT OR UPDATE OR DELETE ON public.punches
 FOR EACH ROW
 EXECUTE FUNCTION public.audit_punch();
 
--- ---------- (F) Criar profiles automaticamente para novos usuários ----------
+-- Criar profiles automaticamente ao criar usuário no Auth
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -160,109 +167,80 @@ AFTER INSERT ON auth.users
 FOR EACH ROW
 EXECUTE FUNCTION public.handle_new_user();
 
--- ---------- (G) Habilitar RLS ----------
+-- RLS ON
 ALTER TABLE public.profiles    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.punches     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.punch_audit ENABLE ROW LEVEL SECURITY;
 
--- ---------- (H) Policies (idempotentes via DROP + CREATE) ----------
--- profiles: self select/update
+-- Policies em profiles
 DROP POLICY IF EXISTS "profiles self select" ON public.profiles;
 CREATE POLICY "profiles self select"
-ON public.profiles
-FOR SELECT
-TO authenticated
+ON public.profiles FOR SELECT TO authenticated
 USING (id = auth.uid());
 
 DROP POLICY IF EXISTS "profiles self update" ON public.profiles;
 CREATE POLICY "profiles self update"
-ON public.profiles
-FOR UPDATE
-TO authenticated
+ON public.profiles FOR UPDATE TO authenticated
 USING (id = auth.uid());
 
--- profiles: manager select/update team
 DROP POLICY IF EXISTS "manager can select team" ON public.profiles;
 CREATE POLICY "manager can select team"
-ON public.profiles
-FOR SELECT
-TO authenticated
-USING ( public.is_manager_of(auth.uid(), id) );
+ON public.profiles FOR SELECT TO authenticated
+USING (public.is_manager_of(auth.uid(), id));
 
 DROP POLICY IF EXISTS "manager can update team" ON public.profiles;
 CREATE POLICY "manager can update team"
-ON public.profiles
-FOR UPDATE
-TO authenticated
-USING ( public.is_manager_of(auth.uid(), id) );
+ON public.profiles FOR UPDATE TO authenticated
+USING (public.is_manager_of(auth.uid(), id));
 
--- profiles: admin all
 DROP POLICY IF EXISTS "admin all on profiles" ON public.profiles;
 CREATE POLICY "admin all on profiles"
-ON public.profiles
-FOR ALL
-TO authenticated
-USING ( public.is_admin(auth.uid()) );
+ON public.profiles FOR ALL TO authenticated
+USING (public.is_admin(auth.uid()));
 
--- punches: employee select own
+-- Policies em punches
 DROP POLICY IF EXISTS "employee select own punches" ON public.punches;
 CREATE POLICY "employee select own punches"
-ON public.punches
-FOR SELECT
-TO authenticated
-USING ( user_id = auth.uid() );
+ON public.punches FOR SELECT TO authenticated
+USING (user_id = auth.uid());
 
--- punches: manager select team
 DROP POLICY IF EXISTS "manager select team punches" ON public.punches;
 CREATE POLICY "manager select team punches"
-ON public.punches
-FOR SELECT
-TO authenticated
-USING ( public.is_manager_of(auth.uid(), user_id) );
+ON public.punches FOR SELECT TO authenticated
+USING (public.is_manager_of(auth.uid(), user_id));
 
--- punches: admin select all
 DROP POLICY IF EXISTS "admin select all punches" ON public.punches;
 CREATE POLICY "admin select all punches"
-ON public.punches
-FOR SELECT
-TO authenticated
-USING ( public.is_admin(auth.uid()) );
+ON public.punches FOR SELECT TO authenticated
+USING (public.is_admin(auth.uid()));
 
--- punches: employee insert own
 DROP POLICY IF EXISTS "employee insert own punches" ON public.punches;
 CREATE POLICY "employee insert own punches"
-ON public.punches
-FOR INSERT
-TO authenticated
-WITH CHECK ( user_id = auth.uid() );
+ON public.punches FOR INSERT TO authenticated
+WITH CHECK (user_id = auth.uid());
 
--- punches: manager/admin update
 DROP POLICY IF EXISTS "manager/admin update punches" ON public.punches;
 CREATE POLICY "manager/admin update punches"
-ON public.punches
-FOR UPDATE
-TO authenticated
-USING ( public.is_manager_of(auth.uid(), user_id) OR public.is_admin(auth.uid()) );
+ON public.punches FOR UPDATE TO authenticated
+USING (public.is_manager_of(auth.uid(), user_id) OR public.is_admin(auth.uid()));
 
--- punches: admin delete
 DROP POLICY IF EXISTS "admin delete punches" ON public.punches;
 CREATE POLICY "admin delete punches"
-ON public.punches
-FOR DELETE
-TO authenticated
-USING ( public.is_admin(auth.uid()) );
+ON public.punches FOR DELETE TO authenticated
+USING (public.is_admin(auth.uid()));
 
--- punch_audit: apenas admin pode SELECT
+-- Policies em punch_audit (apenas admin pode ver)
 DROP POLICY IF EXISTS "admin select audit" ON public.punch_audit;
 CREATE POLICY "admin select audit"
-ON public.punch_audit
-FOR SELECT
-TO authenticated
-USING ( public.is_admin(auth.uid()) );
+ON public.punch_audit FOR SELECT TO authenticated
+USING (public.is_admin(auth.uid()));
 
--- ---------- (I) Backfill: cria profiles que estiverem faltando ----------
+-- Backfill profiles (para usuários já existentes)
 INSERT INTO public.profiles (id, full_name)
 SELECT u.id, COALESCE(u.raw_user_meta_data->>'full_name', u.email)
 FROM auth.users u
 LEFT JOIN public.profiles p ON p.id = u.id
 WHERE p.id IS NULL;
+
+-- Backfill approval_status (se houver linhas antigas)
+UPDATE public.punches SET approval_status = 'pending' WHERE approval_status IS NULL;
