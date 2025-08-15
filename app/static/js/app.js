@@ -10,6 +10,13 @@
   const mapCard = $('#map-card');
   let map, markersLayer;
 
+  // Formatter para horário do Brasil (America/Sao_Paulo)
+  const fmtBR = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    dateStyle: 'short',
+    timeStyle: 'medium'
+  });
+
   function initSupabase(){
     const url = window.__SUPABASE_URL__;
     const key = window.__SUPABASE_ANON_KEY__;
@@ -58,17 +65,20 @@
       const data = await res.json();
       punchesList.innerHTML = '';
       if(!Array.isArray(data)) return;
+
       data.forEach(p => {
         const li = document.createElement('li');
-        const when = new Date(p.occurred_at).toLocaleString();
+        const when = fmtBR.format(new Date(p.occurred_at));
         li.textContent = `[${p.p_type}] ${when}` + (p.latitude ? ` · (${p.latitude}, ${p.longitude})` : '');
         punchesList.appendChild(li);
       });
+
       if(map && data.length){
         markersLayer.clearLayers();
         data.slice(0, 10).forEach(p => {
           if(p.latitude && p.longitude){
-            const marker = L.marker([p.latitude, p.longitude]).bindPopup(`${p.p_type} — ${new Date(p.occurred_at).toLocaleString()}`);
+            const marker = L.marker([p.latitude, p.longitude])
+              .bindPopup(`${p.p_type} — ${fmtBR.format(new Date(p.occurred_at))}`);
             markersLayer.addLayer(marker);
           }
         });
@@ -95,6 +105,8 @@
   async function doPunch(type){
     const { data: { session } } = await supa.auth.getSession();
     if(!session){ return alert('Faça login primeiro'); }
+
+    // geolocalização (opcional)
     const position = await new Promise(resolve => {
       try {
         navigator.geolocation.getCurrentPosition(
