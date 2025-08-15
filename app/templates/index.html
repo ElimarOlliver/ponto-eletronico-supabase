@@ -1,53 +1,88 @@
-<!doctype html>
-<html lang="pt-br">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ponto Eletrônico — Python + Supabase</title>
-    <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script defer src="/static/js/app.js"></script>
-    <script defer>
-      window.__SUPABASE_URL__ = "{{ supabase_url }}";
-      window.__SUPABASE_ANON_KEY__ = "{{ supabase_anon_key }}";
-    </script>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
-  </head>
-  <body class="bg-gray-50 min-h-screen">
-    <div class="max-w-3xl mx-auto p-6 space-y-6">
-      <header class="flex items-center justify-between">
-        <h1 class="text-2xl font-bold">Ponto Eletrônico</h1>
-        <div id="auth-area" class="space-x-2">
-          <button id="btn-login" class="px-3 py-1 rounded bg-black text-white">Entrar</button>
-          <button id="btn-logout" class="hidden px-3 py-1 rounded bg-gray-200">Sair</button>
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Ponto Eletrônico</title>
+
+  <!-- Tailwind CDN básico só p/ estilizar rápido -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Leaflet (mapa) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Supabase -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+
+  <script>
+    window.__SUPABASE_URL__ = "{{ SUPABASE_URL }}";
+    window.__SUPABASE_ANON_KEY__ = "{{ SUPABASE_ANON_KEY }}";
+  </script>
+
+  <style>
+    #map { height: 320px; }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-900">
+  <div class="max-w-4xl mx-auto p-4 space-y-4">
+    <header class="flex items-center justify-between">
+      <h1 class="text-xl font-bold">Ponto Eletrônico</h1>
+      <div class="space-x-2">
+        <button id="btn-login" class="px-3 py-1 rounded bg-emerald-600 text-white">Entrar</button>
+        <button id="btn-logout" class="hidden px-3 py-1 rounded bg-rose-600 text-white">Sair</button>
+      </div>
+    </header>
+
+    <section id="user-info" class="hidden bg-white p-4 rounded shadow">
+      <p>Logado como: <span id="user-email" class="font-semibold"></span></p>
+    </section>
+
+    <section id="punches-card" class="hidden grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="bg-white p-4 rounded shadow">
+        <h2 class="font-semibold mb-3">Meus registros</h2>
+        <div class="space-x-2 mb-3">
+          <button class="btn-punch px-3 py-1 rounded border" data-type="in">Entrada</button>
+          <button class="btn-punch px-3 py-1 rounded border" data-type="break_start">Início pausa</button>
+          <button class="btn-punch px-3 py-1 rounded border" data-type="break_end">Fim pausa</button>
+          <button class="btn-punch px-3 py-1 rounded border" data-type="out">Saída</button>
         </div>
-      </header>
+        <ul id="punches" class="space-y-1 text-sm"></ul>
+      </div>
 
-      <section id="user-info" class="hidden bg-white p-4 rounded shadow">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-sm text-gray-500">Logado como</p>
-            <p id="user-email" class="font-medium"></p>
-          </div>
-          <div class="space-x-2">
-            <button data-type="in" class="btn-punch px-3 py-1 rounded bg-green-600 text-white">Entrada</button>
-            <button data-type="out" class="btn-punch px-3 py-1 rounded bg-red-600 text-white">Saída</button>
-            <button data-type="break_start" class="btn-punch px-3 py-1 rounded bg-yellow-500 text-white">Pausa</button>
-            <button data-type="break_end" class="btn-punch px-3 py-1 rounded bg-blue-600 text-white">Voltar</button>
-          </div>
+      <div id="map-card" class="bg-white p-4 rounded shadow">
+        <h2 class="font-semibold mb-3">Mapa</h2>
+        <div id="map"></div>
+      </div>
+    </section>
+
+    <!-- Minha equipe (só mostra para manager/admin via JS) -->
+    <section id="team-card" class="hidden bg-white p-4 rounded shadow">
+      <h2 class="font-semibold mb-3">Minha equipe</h2>
+
+      <div id="team-members" class="space-y-2 mb-4"></div>
+
+      <div class="flex items-end gap-2 mb-3">
+        <div>
+          <label class="block text-xs text-gray-600">Colaborador</label>
+          <select id="team-user-select" class="border rounded px-2 py-1"></select>
         </div>
-      </section>
+        <div>
+          <label class="block text-xs text-gray-600">Início</label>
+          <input type="datetime-local" id="filter-start" class="border rounded px-2 py-1">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-600">Fim</label>
+          <input type="datetime-local" id="filter-end" class="border rounded px-2 py-1">
+        </div>
+        <button id="btn-apply-filter" class="px-3 py-1 rounded bg-gray-800 text-white">Filtrar</button>
+      </div>
 
-      <section id="map-card" class="hidden bg-white p-4 rounded shadow">
-        <h2 class="font-semibold mb-2">Últimas batidas (mapa)</h2>
-        <div id="map" style="height: 280px;"></div>
-      </section>
+      <h3 class="font-medium mb-2">Pontos do colaborador selecionado</h3>
+      <ul id="team-punches" class="space-y-2 text-sm"></ul>
+    </section>
+  </div>
 
-      <section id="punches-card" class="hidden bg-white p-4 rounded shadow">
-        <h2 class="font-semibold mb-2">Últimas batidas (lista)</h2>
-        <ul id="punches" class="space-y-2 text-sm"></ul>
-      </section>
-    </div>
-  </body>
+  <script src="/static/js/app.js"></script>
+</body>
 </html>
