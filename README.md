@@ -55,7 +55,6 @@ uvicorn app.main:app --host 0.0.0.0 --port $PORT
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 
-> **Nunca** exponha `SERVICE_ROLE_KEY` no frontend. Não é necessário neste starter.
 
 ## 5) Estrutura
 ```
@@ -70,7 +69,3 @@ supabase.sql
 .env.example
 ```
 
-## 6) Commits
-Faça commits pequenos e objetivos (ex.: `feat: add punch anti-duplicate trigger`, `docs: setup steps`).
-
-Boa construção! 🚀
