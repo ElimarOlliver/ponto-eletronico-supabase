@@ -35,15 +35,10 @@
       </div>
     </header>
 
-    <!-- Login multi-tenant: CNPJ + E-mail + Senha -->
+    <!-- Login: só e-mail + senha. A empresa é resolvida no backend. -->
     <section id="login-card" class="bg-white p-4 rounded shadow max-w-md">
-      <h2 class="font-semibold mb-3">Entrar na empresa</h2>
+      <h2 class="font-semibold mb-3">Entrar</h2>
       <form id="login-form" class="space-y-3" autocomplete="on">
-        <div>
-          <label for="login-cnpj" class="block text-xs text-gray-600">CNPJ da empresa</label>
-          <input id="login-cnpj" name="cnpj" inputmode="numeric" placeholder="00.000.000/0001-91"
-                 class="border rounded px-2 py-1 w-full" required minlength="14" maxlength="18" />
-        </div>
         <div>
           <label for="login-email" class="block text-xs text-gray-600">E-mail (login)</label>
           <input id="login-email" name="email" type="email" required
@@ -55,9 +50,29 @@
                  class="border rounded px-2 py-1 w-full" autocomplete="current-password" />
         </div>
         <p id="login-error" class="hidden text-sm text-red-600" role="alert"></p>
-        <button type="submit" id="btn-do-login" class="px-3 py-1 rounded bg-emerald-600 text-white">Entrar</button>
+        <div class="flex items-center justify-between">
+          <button type="submit" id="btn-do-login" class="px-3 py-1 rounded bg-emerald-600 text-white">Entrar</button>
+          <button type="button" id="btn-forgot" class="text-xs text-emerald-700 underline">Esqueci minha senha</button>
+        </div>
       </form>
-      <p class="mt-2 text-xs text-gray-500">Os dados são isolados por CNPJ. Um usuário de uma empresa não enxerga outra.</p>
+      <p class="mt-2 text-xs text-gray-500">Acesso por e-mail e senha. Sua empresa é identificada automaticamente.</p>
+    </section>
+
+    <!-- Recuperação de senha -->
+    <section id="forgot-card" class="hidden bg-white p-4 rounded shadow max-w-md">
+      <h2 class="font-semibold mb-3">Redefinir senha</h2>
+      <form id="forgot-form" class="space-y-3">
+        <div>
+          <label for="forgot-email" class="block text-xs text-gray-600">E-mail cadastrado</label>
+          <input id="forgot-email" name="email" type="email" required
+                 class="border rounded px-2 py-1 w-full" autocomplete="username" />
+        </div>
+        <p id="forgot-msg" class="hidden text-sm text-gray-700" role="status"></p>
+        <div class="flex items-center justify-between">
+          <button type="submit" id="btn-forgot-send" class="px-3 py-1 rounded bg-emerald-600 text-white">Enviar link</button>
+          <button type="button" id="btn-forgot-back" class="text-xs text-gray-600 underline">Voltar ao login</button>
+        </div>
+      </form>
     </section>
 
     <section id="user-info" class="hidden bg-white p-4 rounded shadow">

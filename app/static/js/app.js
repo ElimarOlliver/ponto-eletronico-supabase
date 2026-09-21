@@ -1,8 +1,6 @@
-/* Ponto Eletrônico — frontend multi-tenant (CNPJ + E-mail + Senha)
+/* Ponto Eletrônico — frontend (login só e-mail + senha)
  * - Sem innerHTML com dados do servidor (anti-XSS: só textContent/createElement).
- * - Isolamento por tenant: CNPJ digitado é comparado ao profile.company e
- *   reenviado como header X-Tenant-CNPJ para enforcement futuro no backend.
- * - Compatível com backend legado (sem company) e backend SaaS (com company).
+ * - Tenant resolvido 100% no backend via /api/me; o cliente nunca define empresa.
  */
 (function () {
   'use strict';
@@ -14,7 +12,6 @@
   let map = null;
   let markersLayer = null;
 
-  const TENANT_KEY = 'tenant_cnpj';
   const MANAGER_ROLES = new Set(['manager', 'company_admin', 'system_admin', 'admin']);
   const COMPANY_ADMIN_ROLES = new Set(['company_admin', 'system_admin', 'admin']);
   const VALID_PUNCH_TYPES = new Set(['in', 'out', 'break_start', 'break_end']);
@@ -24,32 +21,6 @@
     dateStyle: 'short',
     timeStyle: 'medium',
   });
-
-  // ---------- CNPJ utils ----------
-  function normalizeCNPJ(v) {
-    return String(v || '').replace(/\D/g, '');
-  }
-
-  function formatCNPJ(digits) {
-    const d = normalizeCNPJ(digits);
-    if (d.length !== 14) return String(digits || '');
-    return d.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
-  }
-
-  function isValidCNPJ(v) {
-    const d = normalizeCNPJ(v);
-    if (d.length !== 14) return false;
-    if (/^(\d)\1{13}$/.test(d)) return false;
-    const calc = (base, weights) => {
-      let sum = 0;
-      for (let i = 0; i < base.length; i++) sum += parseInt(base[i], 10) * weights[i];
-      const r = sum % 11;
-      return r < 2 ? 0 : 11 - r;
-    };
-    const d1 = calc(d.slice(0, 12), [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
-    const d2 = calc(d.slice(0, 12) + d1, [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
-    return d1 === parseInt(d[12], 10) && d2 === parseInt(d[13], 10);
-  }
 
   // ---------- DOM helpers (XSS-safe) ----------
   function clear(el) {
@@ -68,12 +39,10 @@
     els.loginError.classList.toggle('hidden', !msg);
   }
 
-  function getTenantCNPJ() {
-    try {
-      return sessionStorage.getItem(TENANT_KEY) || '';
-    } catch {
-      return '';
-    }
+  function showForgotMsg(msg, isError) {
+    els.forgotMsg.textContent = msg || '';
+    els.forgotMsg.classList.toggle('hidden', !msg);
+    els.forgotMsg.className = 'text-sm ' + (isError ? 'text-red-600' : 'text-gray-700');
   }
 
   // ---------- Supabase ----------
@@ -89,8 +58,6 @@
 
   async function authFetch(path, { method = 'GET', body, session } = {}) {
     const headers = { Authorization: 'Bearer ' + session.access_token };
-    const tenant = getTenantCNPJ();
-    if (tenant) headers['X-Tenant-CNPJ'] = tenant;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const res = await fetch(path, {
       method,
@@ -109,20 +76,22 @@
     }
   }
 
-  // Extrai CNPJ da empresa do profile (suporta vários formatos, legado e novo).
+  // Extrai identificação da empresa do profile (sempre vinda do backend).
   function profileCompanyCNPJ(profile) {
     if (!profile || typeof profile !== 'object') return '';
-    const candidates = [
-      profile.company_cnpj,
-      profile.cnpj,
-      profile.company && profile.company.cnpj,
-      profile.companies && profile.companies.cnpj,
-    ];
-    for (const c of candidates) {
-      const n = normalizeCNPJ(c);
-      if (n) return n;
-    }
-    return '';
+    const raw =
+      profile.company_cnpj ||
+      profile.cnpj ||
+      (profile.company && profile.company.cnpj) ||
+      (profile.companies && profile.companies.cnpj) ||
+      '';
+    return String(raw || '').replace(/\D/g, '');
+  }
+
+  function formatCNPJ14(digits) {
+    const d = String(digits || '').replace(/\D/g, '');
+    if (d.length !== 14) return d;
+    return d.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
   }
 
   function profileCompanyLabel(profile) {
@@ -130,22 +99,16 @@
     const name =
       (profile.company && profile.company.nome) ||
       (profile.company && profile.company.name) ||
-      profile.company_name ||
+      profile.company_nome ||
       '';
-    const cnpj =
-      profileCompanyCNPJ(profile) ||
-      (getTenantCNPJ() ? formatCNPJ(getTenantCNPJ()) : '');
-    if (name && cnpj) return name + ' (' + formatCNPJ(cnpj) + ')';
-    return name || (cnpj ? formatCNPJ(cnpj) : '—');
+    const cnpj = profileCompanyCNPJ(profile);
+    const disp = cnpj ? formatCNPJ14(cnpj) : '';
+    if (name && disp) return name + ' (' + disp + ')';
+    return name || disp || '—';
   }
 
-  // ---------- Auth multi-tenant ----------
-  async function signIn(cnpjRaw, email, password) {
-    const cnpj = normalizeCNPJ(cnpjRaw);
-    if (!isValidCNPJ(cnpj)) {
-      showLoginError('CNPJ inválido. Confira os 14 dígitos.');
-      return;
-    }
+  // ---------- Auth (só e-mail + senha; tenant resolvido no backend) ----------
+  async function signIn(email, password) {
     email = String(email || '').trim();
     if (!email || !password) {
       showLoginError('Informe e-mail e senha.');
@@ -159,31 +122,15 @@
         showLoginError(error.message);
         return;
       }
-      const session = data.session;
-      if (!session) {
+      if (!data.session) {
         showLoginError('Login sem sessão. Tente novamente.');
         return;
       }
-      // Guarda o tenant esperado ANTES de validar, para o /api/me já levar o header.
-      try {
-        sessionStorage.setItem(TENANT_KEY, cnpj);
-      } catch { /* ignore */ }
-
-      const meRes = await authFetch('/api/me', { session });
+      // Valida vínculo/empresa no backend (403 p/ sem empresa ou inativa).
+      const meRes = await authFetch('/api/me', { session: data.session });
       if (!meRes.ok) {
         await supa.auth.signOut();
-        try { sessionStorage.removeItem(TENANT_KEY); } catch { /* ignore */ }
         showLoginError(await readError(meRes));
-        return;
-      }
-      const me = await meRes.json();
-      const backendCNPJ = profileCompanyCNPJ(me);
-      // Se o backend já é multi-tenant, o CNPJ precisa bater. Se é legado
-      // (sem campo de empresa), permite e segue — a migração SQL vem depois.
-      if (backendCNPJ && backendCNPJ !== cnpj) {
-        await supa.auth.signOut();
-        try { sessionStorage.removeItem(TENANT_KEY); } catch { /* ignore */ }
-        showLoginError('Este usuário não pertence ao CNPJ informado.');
         return;
       }
       await renderAuth();
@@ -196,8 +143,46 @@
     try {
       await supa.auth.signOut();
     } finally {
-      try { sessionStorage.removeItem(TENANT_KEY); } catch { /* ignore */ }
       await renderAuth();
+    }
+  }
+
+  function showLogin() {
+    els.loginCard.classList.remove('hidden');
+    els.forgotCard.classList.add('hidden');
+    showForgotMsg('');
+  }
+
+  function showForgot() {
+    els.loginCard.classList.add('hidden');
+    els.forgotCard.classList.remove('hidden');
+    showLoginError('');
+    showForgotMsg('');
+  }
+
+  async function forgotPassword(email) {
+    email = String(email || '').trim();
+    if (!email) {
+      showForgotMsg('Informe o e-mail cadastrado.', true);
+      return;
+    }
+    showForgotMsg('');
+    els.btnForgotSend.disabled = true;
+    try {
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showForgotMsg((data && (data.detail || data.message)) || 'Falha ao enviar. Tente novamente.', true);
+        return;
+      }
+      showForgotMsg('Se o e-mail estiver cadastrado, você receberá o link de redefinição.', false);
+      els.forgotEmail.value = '';
+    } finally {
+      els.btnForgotSend.disabled = false;
     }
   }
 
@@ -224,16 +209,31 @@
     let me = null;
     try {
       const meRes = await authFetch('/api/me', { session });
-      if (meRes.ok) me = await meRes.json();
+      if (!meRes.ok) {
+        // Conta sem vínculo ou empresa desativada: derruba a sessão local.
+        await supa.auth.signOut();
+        els.loginCard.classList.remove('hidden');
+        els.btnLogout.classList.add('hidden');
+        els.userInfo.classList.add('hidden');
+        els.punchesCard.classList.add('hidden');
+        els.teamCard.classList.add('hidden');
+        els.holidaysCard.classList.add('hidden');
+        els.payrollCard.classList.add('hidden');
+        els.companyBadge.classList.add('hidden');
+        showLogin();
+        showLoginError(await readError(meRes));
+        return;
+      }
+      me = await meRes.json();
     } catch (e) {
       console.error(e);
     }
     els.userEmail.textContent = (session.user && session.user.email) || session.user.id;
     els.userRole.textContent = (me && me.role) || '—';
     els.userCompany.textContent = profileCompanyLabel(me);
-    const tenant = getTenantCNPJ();
-    if (tenant) {
-      els.companyBadge.textContent = 'CNPJ ' + formatCNPJ(tenant);
+    const badge = profileCompanyLabel(me);
+    if (me && (me.company_nome || profileCompanyCNPJ(me))) {
+      els.companyBadge.textContent = badge;
       els.companyBadge.classList.remove('hidden');
     } else {
       els.companyBadge.classList.add('hidden');
@@ -771,11 +771,13 @@
     });
     els.loginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      await signIn(els.loginCnpj.value, els.loginEmail.value, els.loginPassword.value);
+      await signIn(els.loginEmail.value, els.loginPassword.value);
     });
-    els.loginCnpj.addEventListener('blur', () => {
-      const raw = els.loginCnpj.value;
-      if (normalizeCNPJ(raw).length === 14) els.loginCnpj.value = formatCNPJ(raw);
+    els.btnForgot.addEventListener('click', showForgot);
+    els.btnForgotBack.addEventListener('click', showLogin);
+    els.forgotForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await forgotPassword(els.forgotEmail.value);
     });
     els.btnLogout.addEventListener('click', signOut);
     document.querySelectorAll('.btn-punch').forEach((btn) => {
@@ -790,11 +792,17 @@
     els = {
       loginCard: $('#login-card'),
       loginForm: $('#login-form'),
-      loginCnpj: $('#login-cnpj'),
       loginEmail: $('#login-email'),
       loginPassword: $('#login-password'),
       loginError: $('#login-error'),
       btnDoLogin: $('#btn-do-login'),
+      btnForgot: $('#btn-forgot'),
+      forgotCard: $('#forgot-card'),
+      forgotForm: $('#forgot-form'),
+      forgotEmail: $('#forgot-email'),
+      forgotMsg: $('#forgot-msg'),
+      btnForgotSend: $('#btn-forgot-send'),
+      btnForgotBack: $('#btn-forgot-back'),
       btnLogout: $('#btn-logout'),
       userInfo: $('#user-info'),
       userEmail: $('#user-email'),

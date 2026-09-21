@@ -412,6 +412,16 @@ def index(request: Request):
     )
 
 
+@app.get("/reset", response_class=HTMLResponse)
+def reset_page(request: Request):
+    """Página de redefinição de senha (destino do link de recovery)."""
+    return templates.TemplateResponse(
+        request,
+        "reset.html",
+        {"SUPABASE_URL": SUPABASE_URL, "SUPABASE_ANON_KEY": SUPABASE_ANON_KEY},
+    )
+
+
 # ----------------------------
 # API pública: resolver empresa por CNPJ (p/ login)
 # ----------------------------

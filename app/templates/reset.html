@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Redefinir senha — Ponto Eletrônico</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2.112.0/dist/umd/supabase.js"></script>
+  <script>
+    window.__SUPABASE_URL__ = "{{ SUPABASE_URL }}";
+    window.__SUPABASE_ANON_KEY__ = "{{ SUPABASE_ANON_KEY }}";
+  </script>
+</head>
+<body class="bg-gray-100 text-gray-900">
+  <div class="max-w-md mx-auto p-4">
+    <h1 class="text-xl font-bold mb-4">Redefinir senha</h1>
+    <section class="bg-white p-4 rounded shadow">
+      <p id="reset-status" class="text-sm text-gray-600 mb-3">Validando link...</p>
+      <form id="reset-form" class="hidden space-y-3">
+        <div>
+          <label for="reset-password" class="block text-xs text-gray-600">Nova senha (mín. 6 caracteres)</label>
+          <input id="reset-password" type="password" required minlength="6"
+                 class="border rounded px-2 py-1 w-full" autocomplete="new-password" />
+        </div>
+        <div>
+          <label for="reset-confirm" class="block text-xs text-gray-600">Confirmar nova senha</label>
+          <input id="reset-confirm" type="password" required minlength="6"
+                 class="border rounded px-2 py-1 w-full" autocomplete="new-password" />
+        </div>
+        <button type="submit" class="px-3 py-1 rounded bg-emerald-600 text-white">Salvar nova senha</button>
+      </form>
+      <p class="mt-3 text-xs"><a href="/" class="text-emerald-700 underline">Voltar ao login</a></p>
+    </section>
+  </div>
+  <script src="/static/js/reset.js"></script>
+</body>
+</html>
