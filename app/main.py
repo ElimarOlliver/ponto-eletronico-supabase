@@ -64,16 +64,16 @@ def _get_jwk_client() -> Any:
     return _jwk_client
 
 
-def validate_jwt_local(token: str) -> Optional[str]:
+def validate_jwt_local(token: str) -> tuple[Optional[str], dict]:
     """Valida o access_token localmente via JWKS.
 
-    Retorna o sub (user_id) se válido, ou None quando a validação local
+    Retorna (sub, claims) se válido; (None, {}) quando a validação local
     está indisponível/falhou — o chamador cai no `auth.get_user` (server).
     Token expirado vira 401 direto (não adianta consultar o servidor).
     """
     client = _get_jwk_client()
     if client is None:
-        return None
+        return None, {}
     try:
         import jwt as pyjwt
 
@@ -85,14 +85,16 @@ def validate_jwt_local(token: str) -> Optional[str]:
             audience="authenticated",
             options={"verify_exp": True, "verify_aud": True},
         )
+        if not isinstance(payload, dict):
+            return None, {}
         sub = payload.get("sub")
-        return str(sub) if sub else None
+        return (str(sub) if sub else None), payload
     except HTTPException:
         raise
     except Exception as e:
         if "expired" in str(e).lower():
             raise HTTPException(status_code=401, detail="Sessão expirada, faça login novamente")
-        return None
+        return None, {}
 
 
 # Rate-limit híbrido: Redis (multi-instância) com fallback em memória (localhost).
@@ -243,6 +245,19 @@ def company_name_of(profile: dict) -> str:
     return str(profile.get("company_nome") or "")
 
 
+def company_active_of(profile: dict) -> Optional[bool]:
+    """Ativa/inativa da empresa. None = desconhecido (não bloqueia)."""
+    if not isinstance(profile, dict):
+        return None
+    comp = profile.get("company") or profile.get("companies") or {}
+    if isinstance(comp, list) and comp:
+        comp = comp[0]
+    if isinstance(comp, dict) and "ativa" in comp:
+        return None if comp.get("ativa") is None else bool(comp.get("ativa"))
+    v = profile.get("company_ativa")
+    return None if v is None else bool(v)
+
+
 def user_safe_error(exc: Exception, fallback: str) -> str:
     """Expõe só mensagens seguras (triggers de negócio); resto vira genérico."""
     msg = str(exc)
@@ -259,7 +274,7 @@ def fetch_profile(sb: Client, user_id: str) -> dict:
     try:
         res = (
             sb.table("profiles")
-            .select("id,full_name,role,manager_id,company_id,companies(cnpj,nome)")
+            .select("id,full_name,role,manager_id,company_id,companies(cnpj,nome,ativa)")
             .eq("id", user_id)
             .single()
             .execute()
@@ -269,14 +284,19 @@ def fetch_profile(sb: Client, user_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Profile not found") from e
     if not prof:
         raise HTTPException(status_code=404, detail="Profile not found")
-    # Normaliza: expõe company_cnpj/company_nome flat para o frontend
+    # Normaliza: expõe company_cnpj/company_nome/company_ativa flat para o frontend
     companies = prof.get("companies")
     if isinstance(companies, list) and companies:
         companies = companies[0]
     if isinstance(companies, dict):
-        prof["company"] = {"cnpj": companies.get("cnpj"), "nome": companies.get("nome")}
+        prof["company"] = {
+            "cnpj": companies.get("cnpj"),
+            "nome": companies.get("nome"),
+            "ativa": companies.get("ativa"),
+        }
         prof["company_cnpj"] = normalize_cnpj(companies.get("cnpj"))
         prof["company_nome"] = companies.get("nome")
+        prof["company_ativa"] = companies.get("ativa")
     return prof
 
 
@@ -284,12 +304,16 @@ def resolve_auth(
     request: Request,
     authorization: Optional[str],
 ) -> tuple[Client, dict, str]:
-    """Middleware de tenant: valida JWT (local via JWKS, fallback server) + CNPJ."""
+    """Middleware de tenant: JWT validado -> profile -> empresa.
+
+    O tenant vem 100% do servidor (profile.company_id). Nenhum dado do
+    cliente (header, body) define a empresa — fim do login por CNPJ.
+    """
     jwt = extract_bearer(authorization)
     sb = supabase_with_user(jwt)
     # P1: validação local economiza 1 roundtrip ao Auth por request.
-    # None = indisponível/falhou -> valida no servidor (comportamento anterior).
-    user_id = validate_jwt_local(jwt)
+    # (None, {}) = indisponível/falhou -> valida no servidor.
+    user_id, claims = validate_jwt_local(jwt)
     if user_id is None:
         try:
             user = sb.auth.get_user(jwt).user
@@ -299,18 +323,20 @@ def resolve_auth(
         if not user:
             raise HTTPException(status_code=401, detail="Token inválido")
         user_id = user.id
+        claims = {}
 
     prof = fetch_profile(sb, user_id)
 
-    raw_tenant = (request.headers.get("x-tenant-cnpj") or "").strip()
-    expected = normalize_cnpj(raw_tenant)
-    if raw_tenant and not is_valid_cnpj(expected):
-        raise HTTPException(status_code=400, detail="CNPJ do tenant inválido (checksum)")
-    backend_cnpj = company_cnpj_of(prof)
-    # Se ambos existem e divergem -> cross-tenant. Se backend é legado (sem
-    # empresa) ou cliente não enviou header, permite (compatibilidade).
-    if expected and backend_cnpj and expected != backend_cnpj:
-        raise HTTPException(status_code=403, detail="Usuário não pertence a este CNPJ")
+    # Exceções de roteamento: sem empresa ou empresa desativada
+    if not prof.get("company_id"):
+        raise HTTPException(status_code=403, detail="Usuário sem empresa vinculada")
+    if company_active_of(prof) is False:
+        raise HTTPException(status_code=403, detail="Empresa desativada, contate o suporte")
+
+    # Claims do hook (quando o plano tem Auth Hooks): divergência = sessão obsoleta.
+    # Tokens sem claims (hook desligado) passam — a RLS + profile continuam valendo.
+    if claims.get("company_id") and str(claims["company_id"]) != str(prof.get("company_id")):
+        raise HTTPException(status_code=401, detail="Sessão desatualizada, faça login novamente")
     return sb, prof, jwt
 
 
@@ -419,7 +445,75 @@ def api_me(request: Request, authorization: Optional[str] = Header(default=None)
     _, prof, _ = resolve_auth(request, authorization)
     prof["company_cnpj"] = company_cnpj_of(prof)
     prof["company_nome"] = company_name_of(prof)
+    prof["company_ativa"] = company_active_of(prof)
     return prof
+
+
+class ForgotPassword(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+
+
+class InviteUser(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    full_name: str = Field(min_length=2, max_length=120)
+    role: Literal["manager", "employee"] = "employee"
+
+
+def _valid_email(value: str) -> str:
+    email = str(value or "").strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=400, detail="E-mail inválido")
+    return email
+
+
+@app.post("/api/auth/forgot-password")
+def api_forgot_password(payload: ForgotPassword, request: Request):
+    """Dispara e-mail de redefinição. Sempre 200 (anti-enumeração de contas)."""
+    rate_limit(request, "forgot-password", 5, 3600)
+    email = _valid_email(payload.email)
+    try:
+        # O Supabase envia o link com redirect para a Site URL do painel.
+        # Configure em Auth -> URL Configuration: Site URL + Redirect URLs (ex: http://localhost:8000/reset).
+        sb_base.auth.reset_password_for_email(email)
+    except Exception:
+        logger.exception("forgot-password failed")
+    return {"ok": True}
+
+
+@app.post("/api/auth/invite")
+def api_invite(
+    payload: InviteUser,
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+):
+    """RH convida funcionário: e-mail com link para definir a senha inicial.
+
+    O user_metadata carrega company_id, e o trigger handle_new_user vincula
+    o profile à empresa automaticamente. Exige service key válida.
+    """
+    _, me, _ = resolve_auth(request, authorization)
+    _require_company_admin(me)
+    rate_limit(request, "invite", 10, 3600, key=str(me["id"]))
+    if sb_admin is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Configure SUPABASE_SERVICE_ROLE_KEY no .env para convidar usuários",
+        )
+    email = _valid_email(payload.email)
+    try:
+        sb_admin.auth.admin.invite_user_by_email(
+            email,
+            options={
+                "data": {
+                    "full_name": payload.full_name.strip(),
+                    "company_id": me["company_id"],
+                    "role": payload.role,
+                }
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=user_safe_error(e, "Falha ao enviar convite")) from e
+    return {"ok": True}
 
 
 # ----------------------------

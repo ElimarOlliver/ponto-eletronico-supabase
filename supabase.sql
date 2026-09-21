@@ -667,6 +667,39 @@ ON public.payroll_closings FOR ALL TO authenticated
 USING (public.is_system_admin(auth.uid()))
 WITH CHECK (public.is_system_admin(auth.uid()));
 
+-- ---------- 11) Custom Access Token Hook (Etapa ② — opcional, requer Auth Hooks no plano)
+-- Ativação no Dashboard: Auth -> Hooks -> Custom Access Token -> selecione esta função.
+-- Injeta company_id e user_role no JWT. A resolução server-side (resolve_auth +
+-- RLS) continua primária e funciona sem o hook; com o hook, o backend ainda
+-- cruza a claim company_id com o profile e derruba sessões obsoletas (401).
+CREATE OR REPLACE FUNCTION public.custom_access_token_hook(event jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  claims jsonb;
+  v_company uuid;
+  v_role public.user_role;
+BEGIN
+  SELECT company_id, role INTO v_company, v_role
+  FROM public.profiles WHERE id = (event->>'user_id')::uuid;
+
+  claims := event->'claims';
+  IF v_company IS NOT NULL THEN
+    claims := jsonb_set(claims, '{company_id}', to_jsonb(v_company));
+  END IF;
+  IF v_role IS NOT NULL THEN
+    claims := jsonb_set(claims, '{user_role}', to_jsonb(v_role));
+  END IF;
+  RETURN jsonb_set(event, '{claims}', claims);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.custom_access_token_hook(jsonb) TO supabase_auth_admin;
+
 -- B10: o guard disparava também em contexto service_role / trigger interno
 -- (auth.uid() IS NULL) e bloqueava seeds e rotinas admin com erro de permissão.
 -- Service_role bypassa a RLS por definição: libera o caminho nesse contexto.
