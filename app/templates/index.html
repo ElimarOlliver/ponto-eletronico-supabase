@@ -3,17 +3,16 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Ponto Eletrônico</title>
+  <title>Ponto Eletrônico — SaaS Multi-tenant</title>
 
-  <!-- Tailwind CDN básico só p/ estilizar rápido -->
   <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- Leaflet (mapa) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <!-- Supabase -->
-  <script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <!-- Supabase (mantido em sync com package.json) -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2.112.0/dist/umd/supabase.js"></script>
 
   <script>
     window.__SUPABASE_URL__ = "{{ SUPABASE_URL }}";
@@ -27,15 +26,43 @@
 <body class="bg-gray-100 text-gray-900">
   <div class="max-w-4xl mx-auto p-4 space-y-4">
     <header class="flex items-center justify-between">
-      <h1 class="text-xl font-bold">Ponto Eletrônico</h1>
+      <div>
+        <h1 class="text-xl font-bold">Ponto Eletrônico</h1>
+        <p id="company-badge" class="hidden text-xs text-gray-600"></p>
+      </div>
       <div class="space-x-2">
-        <button id="btn-login" class="px-3 py-1 rounded bg-emerald-600 text-white">Entrar</button>
         <button id="btn-logout" class="hidden px-3 py-1 rounded bg-rose-600 text-white">Sair</button>
       </div>
     </header>
 
+    <!-- Login multi-tenant: CNPJ + E-mail + Senha -->
+    <section id="login-card" class="bg-white p-4 rounded shadow max-w-md">
+      <h2 class="font-semibold mb-3">Entrar na empresa</h2>
+      <form id="login-form" class="space-y-3" autocomplete="on">
+        <div>
+          <label for="login-cnpj" class="block text-xs text-gray-600">CNPJ da empresa</label>
+          <input id="login-cnpj" name="cnpj" inputmode="numeric" placeholder="00.000.000/0001-91"
+                 class="border rounded px-2 py-1 w-full" required minlength="14" maxlength="18" />
+        </div>
+        <div>
+          <label for="login-email" class="block text-xs text-gray-600">E-mail (login)</label>
+          <input id="login-email" name="email" type="email" required
+                 class="border rounded px-2 py-1 w-full" autocomplete="username" />
+        </div>
+        <div>
+          <label for="login-password" class="block text-xs text-gray-600">Senha</label>
+          <input id="login-password" name="password" type="password" required
+                 class="border rounded px-2 py-1 w-full" autocomplete="current-password" />
+        </div>
+        <p id="login-error" class="hidden text-sm text-red-600" role="alert"></p>
+        <button type="submit" id="btn-do-login" class="px-3 py-1 rounded bg-emerald-600 text-white">Entrar</button>
+      </form>
+      <p class="mt-2 text-xs text-gray-500">Os dados são isolados por CNPJ. Um usuário de uma empresa não enxerga outra.</p>
+    </section>
+
     <section id="user-info" class="hidden bg-white p-4 rounded shadow">
       <p>Logado como: <span id="user-email" class="font-semibold"></span></p>
+      <p class="text-sm text-gray-600">Perfil: <span id="user-role"></span> · Empresa: <span id="user-company"></span></p>
     </section>
 
     <section id="punches-card" class="hidden grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -56,30 +83,109 @@
       </div>
     </section>
 
-    <!-- Minha equipe (só mostra para manager/admin via JS) -->
+    <!-- Equipe (visível para manager/company_admin/system_admin via JS + RLS no backend) -->
     <section id="team-card" class="hidden bg-white p-4 rounded shadow">
       <h2 class="font-semibold mb-3">Minha equipe</h2>
 
       <div id="team-members" class="space-y-2 mb-4"></div>
 
-      <div class="flex items-end gap-2 mb-3">
+      <div class="flex items-end gap-2 mb-3 flex-wrap">
         <div>
-          <label class="block text-xs text-gray-600">Colaborador</label>
+          <label for="team-user-select" class="block text-xs text-gray-600">Colaborador</label>
           <select id="team-user-select" class="border rounded px-2 py-1"></select>
         </div>
         <div>
-          <label class="block text-xs text-gray-600">Início</label>
-          <input type="datetime-local" id="filter-start" class="border rounded px-2 py-1">
+          <label for="filter-start" class="block text-xs text-gray-600">Início</label>
+          <input type="datetime-local" id="filter-start" class="border rounded px-2 py-1" />
         </div>
         <div>
-          <label class="block text-xs text-gray-600">Fim</label>
-          <input type="datetime-local" id="filter-end" class="border rounded px-2 py-1">
+          <label for="filter-end" class="block text-xs text-gray-600">Fim</label>
+          <input type="datetime-local" id="filter-end" class="border rounded px-2 py-1" />
         </div>
-        <button id="btn-apply-filter" class="px-3 py-1 rounded bg-gray-800 text-white">Filtrar</button>
+        <button id="btn-apply-filter" type="button" class="px-3 py-1 rounded bg-gray-800 text-white">Filtrar</button>
       </div>
 
       <h3 class="font-medium mb-2">Pontos do colaborador selecionado</h3>
       <ul id="team-punches" class="space-y-2 text-sm"></ul>
+    </section>
+
+    <!-- Feriados: nacionais (BrasilAPI) + locais da empresa -->
+    <section id="holidays-card" class="hidden bg-white p-4 rounded shadow">
+      <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h2 class="font-semibold">Feriados</h2>
+        <div class="flex items-center gap-2">
+          <label for="holiday-year" class="text-xs text-gray-600">Ano</label>
+          <input id="holiday-year" type="number" min="2000" max="2100" value="2026" class="border rounded px-2 py-1 w-24" />
+          <button id="btn-holidays-reload" type="button" class="px-3 py-1 rounded border">Atualizar</button>
+          <button id="btn-holidays-sync" type="button" class="hidden px-3 py-1 rounded bg-gray-800 text-white">Sincronizar BrasilAPI</button>
+        </div>
+      </div>
+      <ul id="holidays-list" class="space-y-1 text-sm"></ul>
+      <form id="holiday-form" class="hidden mt-3 flex items-end gap-2 flex-wrap">
+        <div>
+          <label for="holiday-date" class="block text-xs text-gray-600">Data (feriado local, ex: 30/11 DF)</label>
+          <input id="holiday-date" type="date" required class="border rounded px-2 py-1" />
+        </div>
+        <div>
+          <label for="holiday-name" class="block text-xs text-gray-600">Nome</label>
+          <input id="holiday-name" type="text" required minlength="2" maxlength="120" placeholder="Dia do Evangélico (DF)" class="border rounded px-2 py-1" />
+        </div>
+        <button type="submit" class="px-3 py-1 rounded bg-emerald-600 text-white">Adicionar local</button>
+      </form>
+      <p class="mt-2 text-xs text-gray-500">Nacionais vêm da BrasilAPI (sincronizado pelo admin). Locais como 30/11 do DF são cadastrados por empresa.</p>
+    </section>
+
+    <!-- Folha: espelho de ponto + fechamento -->
+    <section id="payroll-card" class="hidden bg-white p-4 rounded shadow">
+      <h2 class="font-semibold mb-3">Folha de ponto</h2>
+
+      <div class="flex items-end gap-2 mb-3 flex-wrap">
+        <div id="mirror-user-wrap" class="hidden">
+          <label for="mirror-user-select" class="block text-xs text-gray-600">Colaborador</label>
+          <select id="mirror-user-select" class="border rounded px-2 py-1"></select>
+        </div>
+        <div>
+          <label for="mirror-start" class="block text-xs text-gray-600">Início</label>
+          <input id="mirror-start" type="date" class="border rounded px-2 py-1" />
+        </div>
+        <div>
+          <label for="mirror-end" class="block text-xs text-gray-600">Fim</label>
+          <input id="mirror-end" type="date" class="border rounded px-2 py-1" />
+        </div>
+        <div>
+          <label for="mirror-expected" class="block text-xs text-gray-600">Jornada/dia (min)</label>
+          <input id="mirror-expected" type="number" min="0" max="1440" value="480" class="border rounded px-2 py-1 w-24" />
+        </div>
+        <button id="btn-mirror" type="button" class="px-3 py-1 rounded bg-gray-800 text-white">Gerar espelho</button>
+      </div>
+      <p id="mirror-totals" class="text-sm mb-2"></p>
+      <div class="overflow-x-auto">
+        <table class="text-sm w-full">
+          <thead>
+            <tr class="text-left text-gray-600">
+              <th class="pr-2">Data</th><th class="pr-2">Status</th><th class="pr-2">Previsto</th>
+              <th class="pr-2">Trabalhado</th><th class="pr-2">Extra</th><th class="pr-2">Falta</th><th>Batidas</th>
+            </tr>
+          </thead>
+          <tbody id="mirror-table-body"></tbody>
+        </table>
+      </div>
+
+      <div id="close-wrap" class="hidden mt-4 pt-3 border-t">
+        <h3 class="font-medium mb-2">Fechamento da folha (admin)</h3>
+        <form id="close-form" class="flex items-end gap-2 flex-wrap">
+          <div>
+            <label for="close-start" class="block text-xs text-gray-600">Período início</label>
+            <input id="close-start" type="date" required class="border rounded px-2 py-1" />
+          </div>
+          <div>
+            <label for="close-end" class="block text-xs text-gray-600">Período fim</label>
+            <input id="close-end" type="date" required class="border rounded px-2 py-1" />
+          </div>
+          <button type="submit" class="px-3 py-1 rounded bg-emerald-600 text-white">Fechar folha</button>
+        </form>
+        <ul id="closings-list" class="space-y-1 text-sm mt-2"></ul>
+      </div>
     </section>
   </div>
 
