@@ -385,6 +385,7 @@ WITH CHECK (public.is_system_admin(auth.uid()));
 -- --- profiles ---
 DROP POLICY IF EXISTS "profiles self select" ON public.profiles;
 DROP POLICY IF EXISTS "manager can select team" ON public.profiles;
+DROP POLICY IF EXISTS "manager can update team" ON public.profiles;
 DROP POLICY IF EXISTS "admin all on profiles" ON public.profiles;
 DROP POLICY IF EXISTS "profiles self update" ON public.profiles;
 
