@@ -15,7 +15,7 @@
 --   Drogarias ... Jardim Acropolis LTDA (58102941000116)
 --     Tamara, Lorena, Jessica -> employee
 --   Empresa Padrão (00000000000000) — contas legadas
---     admin@teste.com (company_admin), gestor@teste.com (manager), colab@teste.com (employee)
+--     admin@teste.com (admin), gestor@teste.com (manager), colab@teste.com (employee)
 --
 -- PONTO CRÍTICO (aprendido na prática):
 --   auth.users.instance_id DEVE ser '00000000-0000-0000-0000-000000000000'.
@@ -72,7 +72,7 @@ INSERT INTO seed_users (email, full_name, cnpj, role) VALUES
   ('tamara@acropolis.com.br',   'Tamara',   '58102941000116', 'employee'),
   ('lorena@acropolis.com.br',   'Lorena',   '58102941000116', 'employee'),
   ('jessica@acropolis.com.br',  'Jessica',  '58102941000116', 'employee'),
-  ('admin@teste.com',           'Administrador', '00000000000000', 'company_admin'),
+  ('admin@teste.com',           'Administrador', '00000000000000', 'admin'),
   ('gestor@teste.com',          'Gestor',        '00000000000000', 'manager'),
   ('colab@teste.com',           'Colaborador',   '00000000000000', 'employee');
 
