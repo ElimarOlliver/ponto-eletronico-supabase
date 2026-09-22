@@ -43,12 +43,30 @@ BEGIN
   END IF;
 END $$;
 
--- ---------- 0) Empresas (upsert p/ nomes canônicos) ----------
-INSERT INTO public.companies (cnpj, nome, ativa) VALUES
-  ('66782325000181','Drogarias Por do Sol 2 LTDA', true),
-  ('58102941000116','Drogarias Por do Sol Drogaria Jardim Acropolis LTDA', true),
-  ('00000000000000','Empresa Padrão (migração v1)', true)
-ON CONFLICT (cnpj) DO UPDATE SET nome = EXCLUDED.nome, ativa = true;
+-- ---------- 0) Empresas (upsert por cnpj SEM depender de constraint única) ----------
+-- Implementado em plpgsql de propósito: o banco real pode não ter UNIQUE em
+-- companies.cnpj (a migration_auditoria adiciona a coluna sem a constraint), e
+-- nesse caso ON CONFLICT (cnpj) falharia com 42P10 em TODO run. Este loop
+-- atualiza/insere sem exigir nenhuma constraint.
+DO $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+    ('66782325000181','Drogarias Por do Sol 2 LTDA', true),
+    ('58102941000116','Drogarias Por do Sol Drogaria Jardim Acropolis LTDA', true),
+    ('00000000000000','Empresa Padrão (migração v1)', true)
+  ) AS v(cnpj, nome, ativa) LOOP
+    IF EXISTS (SELECT 1 FROM public.companies WHERE cnpj = r.cnpj) THEN
+      UPDATE public.companies
+        SET nome = r.nome, ativa = true
+      WHERE cnpj = r.cnpj;
+    ELSE
+      INSERT INTO public.companies (cnpj, nome, ativa)
+      VALUES (r.cnpj, r.nome, r.ativa);
+    END IF;
+  END LOOP;
+END $$;
 
 -- ---------- 1) Lista de usuários do seed ----------
 -- TEMP TABLE deliberadamente SEM "ON COMMIT DROP": o SQL Editor pode
