@@ -70,7 +70,9 @@
   async function readError(res) {
     try {
       const j = await res.json();
-      return j.detail || j.message || j.error || 'Erro (' + res.status + ')';
+      // GoTrue usa {msg}, PostgREST/FastAPI usam {detail|message|error}
+      const m = j.detail || j.message || j.error || j.msg || j.error_description;
+      return (m && String(m)) || 'Erro (' + res.status + ')';
     } catch {
       return 'Erro (' + res.status + ')';
     }
