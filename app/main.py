@@ -302,7 +302,7 @@ def _membership_of(me: dict) -> list[dict]:
     try:
         res = (
             sb_admin.table("user_companies")
-            .select("company_id,role_in_company,created_at,companies(cnpj,nome,ativa)")
+            .select("company_id,role_in_company,created_at,companies!user_companies_company_id_fkey(cnpj,nome,ativa)")
             .eq("user_id", me["id"])
             .order("created_at")
             .execute()
@@ -371,7 +371,7 @@ def fetch_profile(sb: Client, user_id: str) -> dict:
     try:
         res = (
             sb.table("profiles")
-            .select("id,full_name,role,manager_id,company_id,companies(cnpj,nome,ativa)")
+            .select("id,full_name,role,manager_id,company_id,companies!profiles_company_id_fkey(cnpj,nome,ativa)")
             .eq("id", user_id)
             .single()
             .execute()
