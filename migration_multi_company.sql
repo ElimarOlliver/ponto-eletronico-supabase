@@ -26,8 +26,9 @@ CREATE INDEX IF NOT EXISTS idx_uc_user    ON public.user_companies (user_id);
 
 -- Garante UNIQUE (user_id, company_id) MESMO se a tabela já existia sem PK
 -- (ex.: criada por versão anterior da migração ou por run parcial).
--- Sem essa constraint, os upserts do seed.sql (ON CONFLICT (user_id, company_id))
--- falham com 42P10 "no unique or exclusion constraint matching the ON CONFLICT".
+-- É necessária para os OWN ON CONFLICT deste arquivo (backfill e trigger
+-- handle_new_user). O seed.sql atual NÃO usa mais ON CONFLICT (loops plpgsql),
+-- mas a PK segue obrigatória para o multi-empresa funcionar via SQL direto.
 DO $$
 BEGIN
   IF NOT EXISTS (

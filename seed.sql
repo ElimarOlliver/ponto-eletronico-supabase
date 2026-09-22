@@ -44,6 +44,11 @@ BEGIN
 END $$;
 
 -- ---------- 1) Lista de usuários do seed ----------
+-- DROP prévio: se um run anterior falhou antes da limpeza e a sessão do SQL
+-- Editor for reutilizada, o CREATE falharia com "relation seed_users already
+-- exists" (42P06). O DROP final (seção 7) continua existindo.
+DROP TABLE IF EXISTS seed_users;
+
 -- TEMP TABLE deliberadamente SEM "ON COMMIT DROP": o SQL Editor pode
 -- auto-commitar statement a statement; a tabela precisa sobreviver
 -- até o fim do script. Limpeza explícita no final.
