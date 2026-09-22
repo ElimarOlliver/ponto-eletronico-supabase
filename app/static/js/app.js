@@ -12,15 +12,55 @@
   let map = null;
   let markersLayer = null;
 
+  // Empresa ativa selecionada pelo gestor multi-empresa (persistida localmente).
+  let activeCompanyId = null;
+  try {
+    activeCompanyId = localStorage.getItem('pe_active_company') || null;
+  } catch (e) { /* storage indisponível */ }
+
   const MANAGER_ROLES = new Set(['manager', 'company_admin', 'system_admin', 'admin']);
   const COMPANY_ADMIN_ROLES = new Set(['company_admin', 'system_admin', 'admin']);
   const VALID_PUNCH_TYPES = new Set(['in', 'out', 'break_start', 'break_end']);
+
+  // Rótulos das ações de marcação (exigência de negócio do Operador).
+  const PUNCH_LABELS = {
+    in: 'Entrada',
+    break_start: 'Saída Almoço / Intervalo',
+    break_end: 'Retorno Almoço / Intervalo',
+    out: 'Saída Final',
+  };
+  const punchLabel = (t) => PUNCH_LABELS[t] || String(t);
 
   const fmtBR = new Intl.DateTimeFormat('pt-BR', {
     timeZone: 'America/Sao_Paulo',
     dateStyle: 'short',
     timeStyle: 'medium',
   });
+  const fmtTimeBR = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  // Dia em AAAA-MM-DD (fuso de Brasília) para agrupar batidas.
+  const fmtDayKey = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const fmtDayLabel = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+  });
+  const dayKeyOf = (iso) => {
+    try {
+      return fmtDayKey.format(new Date(iso));
+    } catch {
+      return '';
+    }
+  };
 
   // ---------- DOM helpers (XSS-safe) ----------
   function clear(el) {
@@ -42,7 +82,7 @@
   function showForgotMsg(msg, isError) {
     els.forgotMsg.textContent = msg || '';
     els.forgotMsg.classList.toggle('hidden', !msg);
-    els.forgotMsg.className = 'text-sm ' + (isError ? 'text-red-600' : 'text-gray-700');
+    els.forgotMsg.className = 'text-sm ' + (isError ? 'text-rose-600' : 'text-slate-700');
   }
 
   // ---------- Supabase ----------
@@ -58,6 +98,7 @@
 
   async function authFetch(path, { method = 'GET', body, session } = {}) {
     const headers = { Authorization: 'Bearer ' + session.access_token };
+    if (activeCompanyId) headers['X-Company-ID'] = activeCompanyId;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const res = await fetch(path, {
       method,
@@ -109,6 +150,144 @@
     return name || disp || '—';
   }
 
+  // ---------- Design system: utilitários visuais (sem quebrar lógica) ----------
+  function avatarInitials(name) {
+    const s = String(name || '').trim();
+    if (!s) return '';
+    const parts = s.split(/\s+/).filter(Boolean);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
+  // Minutos com sinal (ex.: "-1h30" para saldo negativo).
+  const fmtSignedMin = (min) => {
+    const m = Math.round(Number(min) || 0);
+    const sign = m < 0 ? '-' : '';
+    const abs = Math.abs(m);
+    return sign + Math.floor(abs / 60) + 'h' + String(abs % 60).padStart(2, '0');
+  };
+
+  const punchDotColor = (type) => ({
+    in: 'bg-amber-400',
+    break_start: 'bg-blue-500',
+    break_end: 'bg-blue-300',
+    out: 'bg-slate-500',
+  }[type] || 'bg-slate-300');
+
+  function statusBadge(status) {
+    const s = String(status || 'pending');
+    const cls = {
+      approved: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      rejected: 'bg-rose-50 text-rose-700 border-rose-200',
+      pending: 'bg-amber-50 text-amber-700 border-amber-200',
+    }[s] || 'bg-slate-50 text-slate-600 border-slate-200';
+    const span = document.createElement('span');
+    span.className = 'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ' + cls;
+    span.textContent = s;
+    return span;
+  }
+
+  // Status do espelho de ponto (valores vindos do backend: ok/incomplete/absent/holiday/weekend).
+  function dayStatusBadge(d) {
+    const span = document.createElement('span');
+    const base = 'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide';
+    if (d.pending) {
+      span.className = base + ' border-amber-200 bg-amber-50 text-amber-700';
+      span.textContent = 'Pendente';
+    } else if (d.holiday) {
+      span.className = base + ' border-indigo-200 bg-indigo-50 text-indigo-700';
+      span.textContent = 'Feriado';
+    } else {
+      const map = {
+        weekend: ['Folga', 'border-slate-200 bg-slate-50 text-slate-600'],
+        absent: ['Falta', 'border-rose-200 bg-rose-50 text-rose-700'],
+        incomplete: ['Incompleto', 'border-amber-200 bg-amber-50 text-amber-700'],
+        ok: ['OK', 'border-emerald-200 bg-emerald-50 text-emerald-700'],
+      };
+      const cfg = map[String(d.status || '')] || ['—', 'border-slate-200 bg-slate-50 text-slate-600'];
+      span.className = base + ' ' + cfg[1];
+      span.textContent = cfg[0];
+    }
+    return span;
+  }
+
+  // Resumo do dia: deriva o status pela última batida (sem chamada extra).
+  const DAY_STATUS_MAP = [
+    ['in', 'Em serviço', 'bg-emerald-400'],
+    ['break_start', 'Em intervalo', 'bg-amber-400'],
+    ['break_end', 'Retornou do intervalo', 'bg-blue-400'],
+    ['out', 'Jornada encerrada', 'bg-slate-400'],
+  ];
+
+  function renderDaySummary(dayPunches) {
+    if (!els.dayStatus || !els.dayStatusDot || !els.dayStatusText || !els.dayCount) return;
+    const list = Array.isArray(dayPunches)
+      ? dayPunches.slice().sort((a, b) => (a.occurred_at < b.occurred_at ? -1 : 1))
+      : [];
+    els.dayCount.textContent = list.length
+      ? list.length + ' batida' + (list.length > 1 ? 's' : '') + ' registrada' + (list.length > 1 ? 's' : '') + ' hoje'
+      : 'Nenhuma batida hoje';
+    if (!list.length) {
+      els.dayStatusDot.className = 'h-2 w-2 rounded-full bg-slate-300';
+      els.dayStatusText.textContent = 'Aguardando entrada';
+      return;
+    }
+    const last = list[list.length - 1];
+    const cfg = DAY_STATUS_MAP.find(([t]) => t === last.p_type);
+    if (cfg) {
+      els.dayStatusDot.className = 'h-2 w-2 rounded-full ' + cfg[2] + (cfg[0] === 'in' ? ' animate-pulse' : '');
+      els.dayStatusText.textContent = cfg[1];
+    }
+  }
+
+  // Métricas da semana (usa /api/timesheet, que o próprio colaborador pode chamar).
+  function mondayISO() {
+    const now = new Date();
+    const dow = (now.getDay() + 6) % 7; // segunda = 0
+    const mon = new Date(now);
+    mon.setDate(now.getDate() - dow);
+    const iso = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    return { start: iso(mon), end: iso(now) };
+  }
+
+  async function refreshWeekMetrics(session) {
+    if (!els.metricWorked || !els.metricBalance || !els.metricOvertime) return;
+    els.metricWorked.textContent = '—';
+    els.metricBalance.textContent = '—';
+    els.metricBalance.className = 'mt-2 text-3xl font-bold tracking-tight text-slate-900';
+    els.metricOvertime.textContent = '—';
+    try {
+      const rng = mondayISO();
+      const url = '/api/timesheet?start=' + rng.start + '&end=' + rng.end + '&expected_daily_min=480';
+      const res = await authFetch(url, { session });
+      if (!res.ok) return;
+      const data = await res.json();
+      const t = (data && data.totals) || {};
+      els.metricWorked.textContent = fmtSignedMin(t.worked_min);
+      els.metricBalance.textContent = fmtSignedMin(t.balance_min);
+      els.metricBalance.className = 'mt-2 text-3xl font-bold tracking-tight ' +
+        (Number(t.balance_min) < 0 ? 'text-rose-600' : 'text-slate-900');
+      els.metricOvertime.textContent = fmtSignedMin(t.overtime_min);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  // Relógio digital em tempo real (Brasília).
+  function startClock() {
+    if (!els.liveClock || !els.liveDate || startClock.done) return;
+    startClock.done = true;
+    const tick = () => {
+      const n = new Date();
+      els.liveClock.textContent = n.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour12: false });
+      els.liveDate.textContent = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo', weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
+      }).format(n);
+    };
+    tick();
+    setInterval(tick, 1000);
+  }
+
   // ---------- Auth (só e-mail + senha; tenant resolvido no backend) ----------
   async function signIn(email, password) {
     email = String(email || '').trim();
@@ -157,12 +336,14 @@
   }
 
   function showLogin() {
+    if (els.loginSection) els.loginSection.classList.remove('hidden');
     els.loginCard.classList.remove('hidden');
     els.forgotCard.classList.add('hidden');
     showForgotMsg('');
   }
 
   function showForgot() {
+    if (els.loginSection) els.loginSection.classList.remove('hidden');
     els.loginCard.classList.add('hidden');
     els.forgotCard.classList.remove('hidden');
     showLoginError('');
@@ -196,6 +377,23 @@
   }
 
   // ---------- Render ----------
+  function renderCompanySelector(me) {
+    const comps = Array.isArray(me && me.companies) ? me.companies : [];
+    clear(els.companySelect);
+    if (comps.length > 1) {
+      els.companySelect.classList.remove('hidden');
+      comps.forEach((c) => {
+        const o = document.createElement('option');
+        o.value = c.id;
+        o.textContent = (c.nome || 'Empresa') + (c.cnpj ? ' — ' + formatCNPJ14(c.cnpj) : '');
+        els.companySelect.appendChild(o);
+      });
+      els.companySelect.value = (me && me.company_id) || comps[0].id;
+    } else {
+      els.companySelect.classList.add('hidden');
+    }
+  }
+
   async function renderAuth() {
     const { data: { session } } = await supa.auth.getSession();
     const logged = !!session;
@@ -207,14 +405,19 @@
       els.teamCard.classList.add('hidden');
       els.holidaysCard.classList.add('hidden');
       els.payrollCard.classList.add('hidden');
+      els.mapCard.classList.add('hidden');
       els.companyBadge.classList.add('hidden');
-      clear(els.punchesList);
+      els.companySelect.classList.add('hidden');
+      try { localStorage.removeItem('pe_active_company'); } catch (e) { /* noop */ }
+      clear(els.punchesToday);
+      clear(els.punchesWeek);
       clear(els.teamPunchesUl);
       clear(els.teamMembersDiv);
       clear(els.teamUserSelect);
       showLoginError('');
       return;
     }
+    if (els.loginSection) els.loginSection.classList.add('hidden');
     let me = null;
     try {
       const meRes = await authFetch('/api/me', { session });
@@ -228,7 +431,9 @@
         els.teamCard.classList.add('hidden');
         els.holidaysCard.classList.add('hidden');
         els.payrollCard.classList.add('hidden');
+        els.mapCard.classList.add('hidden');
         els.companyBadge.classList.add('hidden');
+        els.companySelect.classList.add('hidden');
         showLogin();
         showLoginError(await readError(meRes));
         return;
@@ -237,9 +442,14 @@
     } catch (e) {
       console.error(e);
     }
-    els.userEmail.textContent = (session.user && session.user.email) || session.user.id;
+    els.userFullName.textContent = (me && me.full_name) || (session.user && session.user.email) || session.user.id;
     els.userRole.textContent = (me && me.role) || '—';
     els.userCompany.textContent = profileCompanyLabel(me);
+    if (els.userAvatar) {
+      els.userAvatar.textContent =
+        avatarInitials(me && me.full_name) || avatarInitials(session.user && session.user.email) || '--';
+    }
+    renderCompanySelector(me);
     const badge = profileCompanyLabel(me);
     if (me && (me.company_nome || profileCompanyCNPJ(me))) {
       els.companyBadge.textContent = badge;
@@ -247,45 +457,110 @@
     } else {
       els.companyBadge.classList.add('hidden');
     }
+    // Operador (employee): interface estritamente mínima — só registro do dia.
+    const isLeader = !!me && MANAGER_ROLES.has(me.role);
+    els.mapCard.classList.toggle('hidden', !isLeader);
+
     await refreshPunches(session);
-    await refreshManager(session, me);
-    await refreshHolidays(session, me);
-    await refreshPayroll(session, me);
-    initMap();
+    await refreshWeekMetrics(session);
+    if (isLeader) {
+      await refreshManager(session, me);
+      await refreshHolidays(session, me);
+      await refreshPayroll(session, me);
+      initMap();
+    } else {
+      els.teamCard.classList.add('hidden');
+      els.holidaysCard.classList.add('hidden');
+      els.payrollCard.classList.add('hidden');
+    }
+  }
+
+  function renderPunchList(ul, list) {
+    clear(ul);
+    if (!list || !list.length) {
+      ul.appendChild(liText('Nenhuma batida.', 'text-sm text-slate-400'));
+      return;
+    }
+    list.slice().sort((a, b) => (a.occurred_at < b.occurred_at ? -1 : 1)).forEach((p) => {
+      let txt = fmtTimeBR.format(new Date(p.occurred_at)) + ' — ' + punchLabel(p.p_type);
+      if (p.note) txt += ' · Nota: ' + String(p.note);
+      const li = liText(txt, 'flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-700');
+      const dot = document.createElement('span');
+      dot.className = 'h-2 w-2 shrink-0 rounded-full ' + punchDotColor(p.p_type);
+      li.prepend(dot);
+      ul.appendChild(li);
+    });
+  }
+
+  function renderWeekHistory(ul, punches) {
+    clear(ul);
+    const byDay = new Map();
+    (Array.isArray(punches) ? punches : []).forEach((p) => {
+      const k = dayKeyOf(p.occurred_at);
+      if (!k) return;
+      if (!byDay.has(k)) byDay.set(k, []);
+      byDay.get(k).push(p);
+    });
+    const today = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const k = fmtDayKey.format(d);
+      const arr = (byDay.get(k) || []).slice().sort((a, b) => (a.occurred_at < b.occurred_at ? -1 : 1));
+      const head = document.createElement('li');
+      head.className = 'flex items-center gap-2 pt-3 text-xs font-bold uppercase tracking-wide text-slate-500';
+      if (i === 6) head.className += ' pt-0';
+      head.textContent = fmtDayLabel.format(d) + (arr.length ? ' · ' + arr.length + ' batida' + (arr.length > 1 ? 's' : '') : '');
+      ul.appendChild(head);
+      if (!arr.length) {
+        ul.appendChild(liText('Sem batidas.', 'pl-4 text-xs text-slate-400'));
+      } else {
+        arr.forEach((p) => {
+          const li = liText(fmtTimeBR.format(new Date(p.occurred_at)) + ' — ' + punchLabel(p.p_type),
+            'flex items-center gap-2 rounded-lg px-2 py-1 text-sm text-slate-600');
+          const dot = document.createElement('span');
+          dot.className = 'h-1.5 w-1.5 shrink-0 rounded-full ' + punchDotColor(p.p_type);
+          li.prepend(dot);
+          ul.appendChild(li);
+        });
+      }
+    }
   }
 
   async function refreshPunches(session) {
     try {
-      const res = await authFetch('/api/my-punches', { session });
+      const res = await authFetch('/api/my-punches?limit=100', { session });
       if (!res.ok) {
         console.error(await readError(res));
         return;
       }
       const data = await res.json();
-      clear(els.punchesList);
-      if (!Array.isArray(data) || !data.length) {
-        els.punchesList.appendChild(liText('Sem registros.', 'text-gray-500'));
-        return;
-      }
-      data.forEach((p) => {
-        const when = fmtBR.format(new Date(p.occurred_at));
-        let txt = '[' + String(p.p_type) + '] ' + when;
-        if (p.latitude && p.longitude) txt += ' · (' + p.latitude + ', ' + p.longitude + ')';
-        els.punchesList.appendChild(liText(txt));
-      });
+      const punches = Array.isArray(data) ? data : [];
 
-      if (map && data.length && markersLayer) {
+      const todayKey = dayKeyOf(new Date().toISOString());
+      const byDay = new Map();
+      punches.forEach((p) => {
+        const k = dayKeyOf(p.occurred_at);
+        if (!k) return;
+        if (!byDay.has(k)) byDay.set(k, []);
+        byDay.get(k).push(p);
+      });
+      renderPunchList(els.punchesToday, byDay.get(todayKey) || []);
+      renderWeekHistory(els.punchesWeek, punches);
+      renderDaySummary(byDay.get(todayKey) || []);
+
+      if (map && punches.length && markersLayer) {
         markersLayer.clearLayers();
-        data.slice(0, 10).forEach((p) => {
+        punches.slice(0, 10).forEach((p) => {
           const lat = Number(p.latitude);
           const lon = Number(p.longitude);
           if (Number.isFinite(lat) && Number.isFinite(lon)) {
             const marker = window.L.marker([lat, lon])
-              .bindPopup(String(p.p_type) + ' — ' + fmtBR.format(new Date(p.occurred_at)));
+              .bindPopup(punchLabel(p.p_type) + ' — ' + fmtBR.format(new Date(p.occurred_at)));
             markersLayer.addLayer(marker);
           }
         });
-        const first = data.find((p) => Number.isFinite(Number(p.latitude)) && Number.isFinite(Number(p.longitude)));
+        const first = punches.find((p) => Number.isFinite(Number(p.latitude)) && Number.isFinite(Number(p.longitude)));
         if (first) map.setView([Number(first.latitude), Number(first.longitude)], 13);
       }
     } catch (e) {
@@ -382,23 +657,34 @@
       const tRes = await authFetch('/api/team', { session });
       if (!tRes.ok) {
         els.teamPunchesUl.textContent = '';
-        els.teamPunchesUl.appendChild(liText('Falha ao carregar equipe.', 'text-red-600'));
+        els.teamPunchesUl.appendChild(liText('Falha ao carregar equipe.', 'text-rose-600'));
         return;
       }
       const team = await tRes.json();
 
       clear(els.teamUserSelect);
       clear(els.teamMembersDiv);
-      (Array.isArray(team) ? team : []).forEach((member) => {
+      const members = Array.isArray(team) ? team : [];
+      members.forEach((member) => {
         const opt = document.createElement('option');
         opt.value = member.id;
         opt.textContent = (member.full_name || member.id) + ' (' + member.role + ')';
         els.teamUserSelect.appendChild(opt);
 
-        const p = document.createElement('p');
-        p.textContent = '• ' + (member.full_name || member.id) + ' — ' + member.role;
-        els.teamMembersDiv.appendChild(p);
+        const chip = document.createElement('span');
+        const roleCls = {
+          company_admin: 'border-blue-200 bg-blue-50 text-blue-700',
+          system_admin: 'border-blue-200 bg-blue-50 text-blue-700',
+          admin: 'border-blue-200 bg-blue-50 text-blue-700',
+          manager: 'border-indigo-200 bg-indigo-50 text-indigo-700',
+        }[member.role] || 'border-slate-200 bg-slate-50 text-slate-600';
+        chip.className = 'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ' + roleCls;
+        chip.textContent = (member.full_name || member.id) + ' · ' + member.role;
+        els.teamMembersDiv.appendChild(chip);
       });
+      if (els.statTeam) {
+        els.statTeam.textContent = members.length + ' colaborador' + (members.length !== 1 ? 'es' : '');
+      }
 
       els.teamUserSelect.onchange = async () => {
         await loadTeamPunches(session, els.teamUserSelect.value);
@@ -422,70 +708,82 @@
 
   function punchRow(p, session, userId) {
     const li = document.createElement('li');
-    li.className = 'border rounded px-2 py-1';
+    li.className = 'rounded-2xl border border-slate-100 bg-white p-3 shadow-sm';
 
     const head = document.createElement('div');
+    head.className = 'flex flex-wrap items-center gap-2';
     const when = fmtBR.format(new Date(p.occurred_at));
-    let headTxt = '[' + String(p.p_type) + '] ' + when;
-    if (p.latitude && p.longitude) headTxt += ' · (' + p.latitude + ', ' + p.longitude + ')';
-    if (p.note) headTxt += ' · Nota: ' + String(p.note);
-    headTxt += ' · ' + (p.approval_status || 'pending');
-    head.textContent = headTxt;
+
+    const ttl = document.createElement('span');
+    ttl.className = 'text-sm font-semibold text-slate-800';
+    ttl.textContent = punchLabel(p.p_type) + ' · ' + when;
+    head.appendChild(ttl);
+
+    head.appendChild(statusBadge(p.approval_status || 'pending'));
+
+    if (p.latitude && p.longitude) {
+      const geo = document.createElement('span');
+      geo.className = 'text-[11px] text-slate-400';
+      geo.textContent = '(' + p.latitude + ', ' + p.longitude + ')';
+      head.appendChild(geo);
+    }
+    if (p.note) {
+      const note = document.createElement('span');
+      note.className = 'rounded-lg bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500';
+      note.textContent = 'Nota: ' + String(p.note);
+      head.appendChild(note);
+    }
     li.appendChild(head);
 
     const actions = document.createElement('div');
-    actions.className = 'mt-1 space-x-2';
+    actions.className = 'mt-2 flex flex-wrap gap-1.5';
 
-    if ((p.approval_status || 'pending') === 'pending') {
-      const bApprove = document.createElement('button');
-      bApprove.type = 'button';
-      bApprove.className = 'px-2 py-0.5 border rounded text-xs';
-      bApprove.textContent = 'Aprovar';
-      bApprove.addEventListener('click', async () => {
-        const up = await authFetch('/api/punch-approve', {
-          method: 'POST', session, body: { id: p.id, decision: 'approved' },
-        });
-        if (!up.ok) {
-          alert(await readError(up));
-          return;
+    const pending = (p.approval_status || 'pending') === 'pending';
+    const baseCls = 'rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition active:scale-95 ';
+    const makeBtn = (label, kind, cls) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = baseCls + cls;
+      b.textContent = label;
+      b.addEventListener('click', async () => {
+        if (kind === 'approve' || kind === 'reject') {
+          const up = await authFetch('/api/punch-approve', {
+            method: 'POST', session, body: { id: p.id, decision: kind === 'approve' ? 'approved' : 'rejected' },
+          });
+          if (!up.ok) { alert(await readError(up)); return; }
+        } else if (kind === 'note') {
+          const note = prompt('Nova nota (vazio apaga):', '');
+          if (note === null) return;
+          const up = await authFetch('/api/punch-update', {
+            method: 'POST', session, body: { id: p.id, note: note === '' ? null : note },
+          });
+          if (!up.ok) { alert(await readError(up)); return; }
+        } else {
+          const cur = new Date(p.occurred_at);
+          const pad = (n) => String(n).padStart(2, '0');
+          const currentLocal =
+            cur.getFullYear() + '-' + pad(cur.getMonth() + 1) + '-' + pad(cur.getDate()) +
+            'T' + pad(cur.getHours()) + ':' + pad(cur.getMinutes());
+          const val = prompt('Novo horário (AAAA-MM-DDTHH:MM, horário local):', currentLocal);
+          if (!val) return;
+          const dt = new Date(val);
+          if (Number.isNaN(dt.getTime())) { alert('Data/hora inválida.'); return; }
+          const up = await authFetch('/api/punch-update', {
+            method: 'POST', session, body: { id: p.id, occurred_at: dt.toISOString() },
+          });
+          if (!up.ok) { alert(await readError(up)); return; }
         }
         await loadTeamPunches(session, userId);
       });
-      const bReject = document.createElement('button');
-      bReject.type = 'button';
-      bReject.className = 'px-2 py-0.5 border rounded text-xs';
-      bReject.textContent = 'Rejeitar';
-      bReject.addEventListener('click', async () => {
-        const up = await authFetch('/api/punch-approve', {
-          method: 'POST', session, body: { id: p.id, decision: 'rejected' },
-        });
-        if (!up.ok) {
-          alert(await readError(up));
-          return;
-        }
-        await loadTeamPunches(session, userId);
-      });
-      actions.appendChild(bApprove);
-      actions.appendChild(bReject);
+      actions.appendChild(b);
+    };
+
+    if (pending) {
+      makeBtn('Aprovar', 'approve', 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100');
+      makeBtn('Rejeitar', 'reject', 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100');
     }
-
-    const bNote = document.createElement('button');
-    bNote.type = 'button';
-    bNote.className = 'px-2 py-0.5 border rounded text-xs';
-    bNote.textContent = 'editar nota';
-    bNote.addEventListener('click', async () => {
-      const note = prompt('Nova nota (vazio apaga):', '');
-      if (note === null) return;
-      const up = await authFetch('/api/punch-update', {
-        method: 'POST', session, body: { id: p.id, note: note === '' ? null : note },
-      });
-      if (!up.ok) {
-        alert(await readError(up));
-        return;
-      }
-      await loadTeamPunches(session, userId);
-    });
-    actions.appendChild(bNote);
+    makeBtn('editar nota', 'note', 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50');
+    makeBtn('editar horário', 'time', 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50');
 
     li.appendChild(actions);
     return li;
@@ -514,11 +812,11 @@
       clear(els.teamPunchesUl);
 
       if (!res.ok) {
-        els.teamPunchesUl.appendChild(liText((data && (data.detail || data.message)) || 'Erro ao carregar.', 'text-red-600'));
+        els.teamPunchesUl.appendChild(liText((data && (data.detail || data.message)) || 'Erro ao carregar.', 'text-rose-600'));
         return;
       }
       if (!Array.isArray(data) || !data.length) {
-        els.teamPunchesUl.appendChild(liText('Sem registros.', 'text-gray-500'));
+        els.teamPunchesUl.appendChild(liText('Sem registros.', 'text-slate-400'));
         return;
       }
       data.forEach((p) => {
@@ -527,7 +825,7 @@
     } catch (e) {
       console.error(e);
       clear(els.teamPunchesUl);
-      els.teamPunchesUl.appendChild(liText('Erro ao carregar pontos.', 'text-red-600'));
+      els.teamPunchesUl.appendChild(liText('Erro ao carregar pontos.', 'text-rose-600'));
     }
   }
 
@@ -551,7 +849,7 @@
       const data = await res.json();
       clear(els.holidaysList);
       if (!res.ok) {
-        els.holidaysList.appendChild(liText((data && (data.detail || data.message)) || 'Erro ao carregar.', 'text-red-600'));
+        els.holidaysList.appendChild(liText((data && (data.detail || data.message)) || 'Erro ao carregar.', 'text-rose-600'));
         return;
       }
       if (!Array.isArray(data) || !data.length) {
@@ -560,18 +858,29 @@
       }
       data.forEach((h) => {
         const li = document.createElement('li');
-        li.className = 'border rounded px-2 py-1 flex items-center justify-between gap-2';
+        li.className = 'flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2';
         const label = document.createElement('span');
         let d = String(h.h_date || '');
         try { d = fmtDateBR.format(new Date(d + 'T12:00:00')); } catch { /* mantém */ }
-        label.textContent = d + ' · ' + String(h.name) + ' [' + String(h.kind) + (h.company_id ? ', local' : ', nacional') + ']';
+        label.textContent = d + ' · ' + String(h.name);
+        label.className = 'text-sm text-slate-700';
         li.appendChild(label);
+
+        const local = !!(h.company_id);
+        const kind = document.createElement('span');
+        kind.className = 'shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ' +
+          (local ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500');
+        kind.textContent = local ? 'Local' : 'Nacional';
+        li.appendChild(kind);
         els.holidaysList.appendChild(li);
       });
+      if (els.statHolidays) {
+        els.statHolidays.textContent = data.length + ' feriado' + (data.length !== 1 ? 's' : '');
+      }
     } catch (e) {
       console.error(e);
       clear(els.holidaysList);
-      els.holidaysList.appendChild(liText('Erro ao carregar feriados.', 'text-red-600'));
+      els.holidaysList.appendChild(liText('Erro ao carregar feriados.', 'text-rose-600'));
     }
   }
 
@@ -595,6 +904,9 @@
 
   async function refreshPayroll(session, me) {
     els.payrollCard.classList.remove('hidden');
+    if (els.statCompany) {
+      els.statCompany.textContent = profileCompanyLabel(me) || '—';
+    }
     const isManager = !!me && MANAGER_ROLES.has(me.role);
     const isAdmin = !!me && COMPANY_ADMIN_ROLES.has(me.role);
     els.closeWrap.classList.toggle('hidden', !isAdmin);
@@ -633,9 +945,9 @@
     else clear(els.closingsList);
   }
 
-  function mirrorCell(text) {
+  function mirrorCell(text, extra) {
     const td = document.createElement('td');
-    td.className = 'pr-2';
+    td.className = 'px-3 py-2.5 text-slate-600' + (extra ? ' ' + extra : '');
     td.textContent = text;
     return td;
   }
@@ -668,15 +980,21 @@
 
       (Array.isArray(data.days) ? data.days : []).forEach((d) => {
         const tr = document.createElement('tr');
+        tr.className = 'border-b border-slate-100 odd:bg-white even:bg-slate-50/60 hover:bg-blue-50/40';
         let dateTxt = String(d.date || '');
         try { dateTxt = fmtDateBR.format(new Date(dateTxt + 'T12:00:00')); } catch { /* mantém */ }
-        tr.appendChild(mirrorCell(dateTxt));
-        tr.appendChild(mirrorCell(String(d.status || '') + (d.pending ? ' (pendente)' : '') + (d.holiday ? ' (feriado)' : '')));
+        tr.appendChild(mirrorCell(dateTxt, 'font-semibold text-slate-800'));
+
+        const tdStatus = document.createElement('td');
+        tdStatus.className = 'px-3 py-2.5';
+        tdStatus.appendChild(dayStatusBadge(d));
+        tr.appendChild(tdStatus);
+
         tr.appendChild(mirrorCell(fmtMin(d.expected_min)));
         tr.appendChild(mirrorCell(fmtMin(d.worked_min)));
-        tr.appendChild(mirrorCell(fmtMin(d.overtime_min)));
-        tr.appendChild(mirrorCell(fmtMin(d.deficit_min)));
-        tr.appendChild(mirrorCell(String(d.punches || 0)));
+        tr.appendChild(mirrorCell(fmtMin(d.overtime_min), 'text-emerald-600'));
+        tr.appendChild(mirrorCell(fmtMin(d.deficit_min), 'text-rose-600'));
+        tr.appendChild(mirrorCell(String(d.punches || 0), d.pending ? 'font-bold text-amber-700' : ''));
         els.mirrorTableBody.appendChild(tr);
       });
       if (!els.mirrorTableBody.firstChild) {
@@ -696,7 +1014,7 @@
       const res = await authFetch('/api/payroll/closings', { session });
       const data = await res.json();
       if (!res.ok) {
-        els.closingsList.appendChild(liText((data && (data.detail || data.message)) || 'Erro.', 'text-red-600'));
+        els.closingsList.appendChild(liText((data && (data.detail || data.message)) || 'Erro.', 'text-rose-600'));
         return;
       }
       if (!Array.isArray(data) || !data.length) {
@@ -706,6 +1024,7 @@
       data.forEach((c) => {
         els.closingsList.appendChild(liText(
           String(c.period_start) + ' → ' + String(c.period_end) + ' · ' + String(c.status),
+          'rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-600',
         ));
       });
     } catch (e) {
@@ -789,6 +1108,14 @@
       await forgotPassword(els.forgotEmail.value);
     });
     els.btnLogout.addEventListener('click', signOut);
+    els.companySelect.addEventListener('change', async () => {
+      const v = els.companySelect.value;
+      if (!v) return;
+      activeCompanyId = v;
+      try { localStorage.setItem('pe_active_company', v); } catch (e) { /* noop */ }
+      await renderAuth();
+    });
+    els.btnPrintMirror.addEventListener('click', () => window.print());
     document.querySelectorAll('.btn-punch').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const t = e.currentTarget.getAttribute('data-type');
@@ -813,13 +1140,16 @@
       btnForgotSend: $('#btn-forgot-send'),
       btnForgotBack: $('#btn-forgot-back'),
       btnLogout: $('#btn-logout'),
+      companySelect: $('#company-select'),
       userInfo: $('#user-info'),
-      userEmail: $('#user-email'),
+      userFullName: $('#user-full-name'),
       userRole: $('#user-role'),
       userCompany: $('#user-company'),
       companyBadge: $('#company-badge'),
-      punchesList: $('#punches'),
+      punchesToday: $('#punches-today'),
+      punchesWeek: $('#punches-week'),
       punchesCard: $('#punches-card'),
+      mapCard: $('#map-card'),
       teamCard: $('#team-card'),
       teamMembersDiv: $('#team-members'),
       teamUserSelect: $('#team-user-select'),
@@ -842,6 +1172,7 @@
       mirrorEnd: $('#mirror-end'),
       mirrorExpected: $('#mirror-expected'),
       btnMirror: $('#btn-mirror'),
+      btnPrintMirror: $('#btn-print-mirror'),
       mirrorTotals: $('#mirror-totals'),
       mirrorTableBody: $('#mirror-table-body'),
       closeWrap: $('#close-wrap'),
@@ -849,6 +1180,21 @@
       closeStart: $('#close-start'),
       closeEnd: $('#close-end'),
       closingsList: $('#closings-list'),
+      // Design system (novos elementos visuais)
+      loginSection: $('#login-section'),
+      userAvatar: $('#user-avatar'),
+      liveClock: $('#live-clock'),
+      liveDate: $('#live-date'),
+      dayStatus: $('#day-status'),
+      dayStatusDot: $('#day-status-dot'),
+      dayStatusText: $('#day-status-text'),
+      dayCount: $('#day-count'),
+      metricWorked: $('#metric-worked'),
+      metricBalance: $('#metric-balance'),
+      metricOvertime: $('#metric-overtime'),
+      statTeam: $('#stat-team'),
+      statHolidays: $('#stat-holidays'),
+      statCompany: $('#stat-company'),
     };
   }
 
@@ -861,6 +1207,7 @@
       return;
     }
     wire();
+    startClock();
     await renderAuth();
   });
 })();

@@ -3,10 +3,25 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <link rel="icon" href="data:," />
-  <title>Ponto Eletrônico — SaaS Multi-tenant</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f59e0b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7v5l3 2'/%3E%3C/svg%3E"/>
+  <title>Ponto Eletrônico — Gestão de RH</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+          },
+        },
+      },
+    };
+  </script>
 
   <!-- Leaflet (mapa) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -22,188 +37,443 @@
 
   <style>
     #map { height: 320px; }
+
+    /* Scrollbar discreta */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+    /* Botões de marcação desabilitados durante envio */
+    .btn-punch:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    /* Impressão: apenas o espelho de ponto */
+    @media print {
+      body { background: #fff !important; }
+      header, #login-section, #user-info, #punches-card, #map-card,
+      #team-card, #holidays-card, .no-print { display: none !important; }
+      main { max-width: 100% !important; padding: 0 !important; }
+      #payroll-card {
+        display: block !important;
+        border: 1px solid #e2e8f0 !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+      }
+      #payroll-card .no-print { display: none !important; }
+      #close-wrap { display: none !important; }
+      #mirror-table-body tr { box-shadow: none !important; }
+    }
   </style>
 </head>
-<body class="bg-gray-100 text-gray-900">
-  <div class="max-w-4xl mx-auto p-4 space-y-4">
-    <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-xl font-bold">Ponto Eletrônico</h1>
-        <p id="company-badge" class="hidden text-xs text-gray-600"></p>
-      </div>
-      <div class="space-x-2">
-        <button id="btn-logout" class="hidden px-3 py-1 rounded bg-rose-600 text-white">Sair</button>
-      </div>
-    </header>
+<body class="min-h-screen bg-slate-50 text-slate-900 antialiased">
 
-    <!-- Login: só e-mail + senha. A empresa é resolvida no backend. -->
-    <section id="login-card" class="bg-white p-4 rounded shadow max-w-md">
-      <h2 class="font-semibold mb-3">Entrar</h2>
-      <form id="login-form" class="space-y-3" autocomplete="on">
+  <!-- Brilho decorativo de fundo (SaaS) -->
+  <div class="pointer-events-none fixed inset-x-0 top-0 -z-10 h-[30rem] overflow-hidden" aria-hidden="true">
+    <div class="absolute -top-32 left-1/2 h-72 w-[46rem] -translate-x-1/2 rounded-full bg-blue-600/10 blur-3xl"></div>
+    <div class="absolute -top-10 right-[-6rem] h-56 w-56 rounded-full bg-amber-400/10 blur-3xl"></div>
+  </div>
+
+  <!-- ================================================================
+       HEADER — fixo, glassmorphism (bg-white/90 + backdrop-blur)
+  ================================================================= -->
+  <header class="sticky top-0 z-50 border-b border-slate-200/70 bg-white/90 backdrop-blur-md">
+    <div class="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
+      <div class="flex min-w-0 items-center gap-3">
+        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-950 via-blue-900 to-slate-900 text-amber-400 shadow-lg shadow-blue-950/20">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5">
+            <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+          </svg>
+        </div>
+        <div class="min-w-0">
+          <h1 class="truncate text-base font-bold tracking-tight text-slate-900">Ponto Eletrônico</h1>
+          <p id="company-badge" class="hidden truncate text-xs font-medium text-slate-500"></p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 sm:gap-3">
+        <!-- Seletor de CNPJ (gestores multi-empresa) -->
+        <select id="company-select"
+                class="hidden max-w-[200px] cursor-pointer rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm outline-none ring-blue-600/20 transition focus:border-blue-400 focus:ring-2 sm:max-w-[280px]"></select>
+
+        <!-- Chip do usuário logado -->
+        <div id="user-info" class="hidden">
+          <div class="flex items-center gap-2.5 rounded-2xl border border-slate-100 bg-white py-1.5 pl-1.5 pr-3 shadow-sm">
+            <div id="user-avatar" class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-950 via-blue-900 to-blue-700 text-xs font-bold text-white shadow">--</div>
+            <div class="hidden leading-tight sm:block">
+              <p id="user-full-name" class="max-w-[180px] truncate text-sm font-semibold text-slate-800"></p>
+              <p id="user-role" class="text-[11px] font-medium text-slate-500"></p>
+              <p id="user-company" class="max-w-[220px] truncate text-[11px] text-slate-400"></p>
+            </div>
+          </div>
+        </div>
+
+        <button id="btn-logout"
+                class="hidden rounded-xl bg-rose-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm shadow-rose-600/20 transition hover:bg-rose-700 active:scale-95">
+          Sair
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+
+    <!-- ================================================================
+         LOGIN — card centralizado (glass, gradiente)
+    ================================================================= -->
+    <section id="login-section" class="flex min-h-[70vh] items-center justify-center">
+
+      <div id="login-card" class="w-full max-w-md rounded-3xl border border-slate-100 bg-white/80 p-6 shadow-xl shadow-slate-900/5 backdrop-blur-sm sm:p-8">
+        <div class="mb-6 flex items-center gap-3">
+          <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-950 via-blue-900 to-slate-900 text-amber-400 shadow-lg shadow-blue-950/20">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6">
+              <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-lg font-bold text-slate-900">Bem-vindo de volta</h2>
+            <p class="text-xs text-slate-500">Acesso com e-mail e senha</p>
+          </div>
+        </div>
+
+        <form id="login-form" class="space-y-4" autocomplete="on">
+          <div>
+            <label for="login-email" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">E-mail (login)</label>
+            <input id="login-email" name="email" type="email" required autocomplete="username"
+                   class="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-600/20"
+                   placeholder="voce@empresa.com.br"/>
+          </div>
+          <div>
+            <label for="login-password" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Senha</label>
+            <input id="login-password" name="password" type="password" required autocomplete="current-password"
+                   class="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-600/20"
+                   placeholder="••••••••"/>
+          </div>
+
+          <p id="login-error" class="hidden rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700" role="alert"></p>
+
+          <div class="flex items-center justify-between gap-2 pt-1">
+            <button type="submit" id="btn-do-login"
+                    class="rounded-xl bg-amber-400 px-6 py-2.5 text-sm font-bold text-slate-900 shadow-lg shadow-amber-400/30 transition hover:bg-amber-500 active:scale-[0.98] disabled:opacity-60">
+              Entrar
+            </button>
+            <button type="button" id="btn-forgot" class="text-xs font-semibold text-blue-700 underline-offset-2 hover:underline">
+              Esqueci minha senha
+            </button>
+          </div>
+        </form>
+
+        <p class="mt-5 text-xs text-slate-400">Sua empresa é identificada automaticamente no acesso.</p>
+      </div>
+
+      <div id="forgot-card" class="hidden w-full max-w-md rounded-3xl border border-slate-100 bg-white/80 p-6 shadow-xl shadow-slate-900/5 backdrop-blur-sm sm:p-8">
+        <h2 class="text-lg font-bold text-slate-900">Redefinir senha</h2>
+        <p class="mb-5 mt-1 text-xs text-slate-500">Enviaremos um link de recuperação para o seu e-mail.</p>
+        <form id="forgot-form" class="space-y-4">
+          <div>
+            <label for="forgot-email" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">E-mail cadastrado</label>
+            <input id="forgot-email" name="email" type="email" required autocomplete="username"
+                   class="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-600/20"/>
+          </div>
+          <p id="forgot-msg" class="hidden rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700" role="status"></p>
+          <div class="flex items-center justify-between gap-2 pt-1">
+            <button type="submit" id="btn-forgot-send"
+                    class="rounded-xl bg-amber-400 px-6 py-2.5 text-sm font-bold text-slate-900 shadow-lg shadow-amber-400/30 transition hover:bg-amber-500 active:scale-[0.98] disabled:opacity-60">
+              Enviar link
+            </button>
+            <button type="button" id="btn-forgot-back" class="text-xs font-semibold text-slate-600 underline-offset-2 hover:underline">
+              Voltar ao login
+            </button>
+          </div>
+        </form>
+      </div>
+
+    </section>
+
+    <!-- ================================================================
+         DASHBOARD DO COLABORADOR — ponto eletrônico
+    ================================================================= -->
+    <section id="punches-card" class="hidden space-y-6 pt-2">
+
+      <!-- Hero: relógio em tempo real + status do dia -->
+      <div class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-blue-950 via-blue-900 to-slate-900 p-6 text-white shadow-xl shadow-blue-950/20 sm:p-8">
+        <div class="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-amber-400/20 blur-3xl" aria-hidden="true"></div>
+        <div class="pointer-events-none absolute -bottom-20 -left-10 h-56 w-56 rounded-full bg-blue-500/20 blur-3xl" aria-hidden="true"></div>
+
+        <div class="relative flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div class="min-w-0">
+            <p class="text-xs font-semibold uppercase tracking-widest text-blue-200/80">Marcação de ponto</p>
+            <p id="live-clock" class="mt-1 font-mono text-5xl font-bold tracking-tight tabular-nums sm:text-6xl">--:--:--</p>
+            <p id="live-date" class="mt-2 text-sm text-blue-100/90"></p>
+          </div>
+          <div class="flex flex-wrap items-center gap-3 lg:flex-col lg:items-end">
+            <span id="day-status"
+                  class="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-white backdrop-blur-sm">
+              <span id="day-status-dot" class="h-2 w-2 rounded-full bg-slate-300"></span>
+              <span id="day-status-text">Aguardando entrada</span>
+            </span>
+            <p id="day-count" class="text-xs font-medium text-blue-100/90"></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ações rápidas de marcação -->
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <button type="button" data-type="in"
+                class="btn-punch flex flex-col items-start gap-1 rounded-2xl bg-amber-400 px-5 py-4 text-left shadow-lg shadow-amber-400/30 transition hover:bg-amber-500 active:scale-[0.98]">
+          <span class="text-base font-bold text-slate-900 sm:text-lg">Entrada</span>
+          <span class="text-xs font-medium text-slate-800/70">Início da jornada</span>
+        </button>
+        <button type="button" data-type="break_start"
+                class="btn-punch flex flex-col items-start gap-1 rounded-2xl bg-blue-600 px-5 py-4 text-left shadow-lg shadow-blue-600/30 transition hover:bg-blue-700 active:scale-[0.98]">
+          <span class="text-base font-bold text-white sm:text-lg">Saída Almoço</span>
+          <span class="text-xs font-medium text-blue-100/90">Intervalo</span>
+        </button>
+        <button type="button" data-type="break_end"
+                class="btn-punch flex flex-col items-start gap-1 rounded-2xl bg-blue-700 px-5 py-4 text-left shadow-lg shadow-blue-700/30 transition hover:bg-blue-800 active:scale-[0.98]">
+          <span class="text-base font-bold text-white sm:text-lg">Retorno Almoço</span>
+          <span class="text-xs font-medium text-blue-100/90">Fim do intervalo</span>
+        </button>
+        <button type="button" data-type="out"
+                class="btn-punch flex flex-col items-start gap-1 rounded-2xl bg-slate-900 px-5 py-4 text-left shadow-lg shadow-slate-900/30 transition hover:bg-slate-800 active:scale-[0.98]">
+          <span class="text-base font-bold text-white sm:text-lg">Saída Final</span>
+          <span class="text-xs font-medium text-slate-300/90">Fim da jornada</span>
+        </button>
+      </div>
+
+      <!-- Resumo semanal (métricas) -->
+      <div id="metrics-grid" class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div class="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+          <div class="flex items-center justify-between">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Trabalhado</p>
+            <span class="flex h-8 w-8 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            </span>
+          </div>
+          <p id="metric-worked" class="mt-2 text-3xl font-bold tracking-tight text-slate-900">—</p>
+          <p class="mt-1 text-xs text-slate-400">Na semana atual</p>
+        </div>
+
+        <div class="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+          <div class="flex items-center justify-between">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Saldo</p>
+            <span class="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4"><path d="m16 16 3-8 3 8c-.87 2.04-2.61 3.5-4.5 3.5s-3.63-1.46-4.5-3.5Z"/><path d="m2 16 3-8 3 8c-.87 2.04-2.61 3.5-4.5 3.5s-3.63-1.46-4.5-3.5Z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/></svg>
+            </span>
+          </div>
+          <p id="metric-balance" class="mt-2 text-3xl font-bold tracking-tight text-slate-900">—</p>
+          <p class="mt-1 text-xs text-slate-400">Diferença previsto × real</p>
+        </div>
+
+        <div class="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+          <div class="flex items-center justify-between">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Extras</p>
+            <span class="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+            </span>
+          </div>
+          <p id="metric-overtime" class="mt-2 text-3xl font-bold tracking-tight text-slate-900">—</p>
+          <p class="mt-1 text-xs text-slate-400">Horas além da jornada</p>
+        </div>
+      </div>
+
+      <!-- Registros de hoje e histórico da semana -->
+      <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div class="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+          <div class="mb-3 flex items-center gap-2">
+            <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-50 text-blue-700">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            </span>
+            <h2 class="text-base font-bold text-slate-900">Registros de hoje</h2>
+          </div>
+          <ul id="punches-today" class="space-y-2"></ul>
+        </div>
+
+        <div class="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+          <div class="mb-3 flex items-center gap-2">
+            <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+            </span>
+            <h2 class="text-base font-bold text-slate-900">Histórico da semana</h2>
+          </div>
+          <ul id="punches-week" class="space-y-1"></ul>
+        </div>
+      </div>
+
+      <!-- Mapa (visível apenas para gestores) -->
+      <div id="map-card" class="hidden rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+        <div class="mb-3 flex items-center gap-2">
+          <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-50 text-rose-600">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+          </span>
+          <h2 class="text-base font-bold text-slate-900">Mapa</h2>
+        </div>
+        <div id="map" class="rounded-xl"></div>
+      </div>
+    </section>
+
+    <!-- ================================================================
+         GESTOR — Equipe
+    ================================================================= -->
+    <section id="team-card" class="hidden rounded-3xl border border-slate-100 bg-white p-5 shadow-sm sm:p-6">
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <label for="login-email" class="block text-xs text-gray-600">E-mail (login)</label>
-          <input id="login-email" name="email" type="email" required
-                 class="border rounded px-2 py-1 w-full" autocomplete="username" />
+          <h2 class="text-lg font-bold text-slate-900">Minha equipe</h2>
+          <p class="text-xs text-slate-500">Pontos, ajustes e aprovações dos colaboradores</p>
+        </div>
+        <span id="stat-team" class="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">0 colaboradores</span>
+      </div>
+
+      <div id="team-members" class="mb-4 flex flex-wrap gap-2"></div>
+
+      <div class="mb-4 grid grid-cols-1 gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div>
+          <label for="team-user-select" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Colaborador</label>
+          <select id="team-user-select" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-600/20"></select>
         </div>
         <div>
-          <label for="login-password" class="block text-xs text-gray-600">Senha</label>
-          <input id="login-password" name="password" type="password" required
-                 class="border rounded px-2 py-1 w-full" autocomplete="current-password" />
+          <label for="filter-start" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Início</label>
+          <input type="datetime-local" id="filter-start" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-600/20"/>
         </div>
-        <p id="login-error" class="hidden text-sm text-red-600" role="alert"></p>
-        <div class="flex items-center justify-between">
-          <button type="submit" id="btn-do-login" class="px-3 py-1 rounded bg-emerald-600 text-white">Entrar</button>
-          <button type="button" id="btn-forgot" class="text-xs text-emerald-700 underline">Esqueci minha senha</button>
+        <div>
+          <label for="filter-end" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Fim</label>
+          <input type="datetime-local" id="filter-end" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-600/20"/>
         </div>
+        <div class="flex items-end">
+          <button id="btn-apply-filter" type="button"
+                  class="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 active:scale-[0.98]">
+            Filtrar
+          </button>
+        </div>
+        <div class="hidden lg:block"></div>
+      </div>
+
+      <h3 class="mb-2 text-sm font-semibold text-slate-700">Pontos do colaborador selecionado</h3>
+      <ul id="team-punches" class="space-y-2"></ul>
+    </section>
+
+    <!-- ================================================================
+         GESTOR — Feriados
+    ================================================================= -->
+    <section id="holidays-card" class="hidden rounded-3xl border border-slate-100 bg-white p-5 shadow-sm sm:p-6">
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 class="text-lg font-bold text-slate-900">Feriados</h2>
+          <p class="text-xs text-slate-500">Nacionais (BrasilAPI) e locais da empresa</p>
+        </div>
+        <span id="stat-holidays" class="rounded-full bg-indigo-50 px-3 py-1 text-xs font-bold text-indigo-700">0 feriados</span>
+      </div>
+
+      <div class="mb-4 flex flex-wrap items-end gap-3 rounded-2xl bg-slate-50 p-4 no-print">
+        <div>
+          <label for="holiday-year" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Ano</label>
+          <input id="holiday-year" type="number" min="2000" max="2100" value="2026"
+                 class="w-28 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-600/20"/>
+        </div>
+        <button id="btn-holidays-reload" type="button"
+                class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-[0.98]">
+          Atualizar
+        </button>
+        <button id="btn-holidays-sync" type="button"
+                class="hidden rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 active:scale-[0.98] disabled:opacity-60">
+          Sincronizar BrasilAPI
+        </button>
+      </div>
+
+      <ul id="holidays-list" class="space-y-2"></ul>
+
+      <form id="holiday-form" class="no-print mt-4 hidden grid grid-cols-1 items-end gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-[1fr_2fr_auto]">
+        <div>
+          <label for="holiday-date" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Data (feriado local)</label>
+          <input id="holiday-date" type="date" required class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-600/20"/>
+        </div>
+        <div>
+          <label for="holiday-name" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Nome</label>
+          <input id="holiday-name" type="text" required minlength="2" maxlength="120" placeholder="Dia do Evangélico (DF)"
+                 class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-600/20"/>
+        </div>
+        <button type="submit" class="rounded-xl bg-amber-400 px-5 py-2 text-sm font-bold text-slate-900 shadow-lg shadow-amber-400/30 transition hover:bg-amber-500 active:scale-[0.98]">
+          Adicionar local
+        </button>
       </form>
-      <p class="mt-2 text-xs text-gray-500">Acesso por e-mail e senha. Sua empresa é identificada automaticamente.</p>
     </section>
 
-    <!-- Recuperação de senha -->
-    <section id="forgot-card" class="hidden bg-white p-4 rounded shadow max-w-md">
-      <h2 class="font-semibold mb-3">Redefinir senha</h2>
-      <form id="forgot-form" class="space-y-3">
+    <!-- ================================================================
+         GESTOR — Folha (espelho de ponto + fechamento)
+    ================================================================= -->
+    <section id="payroll-card" class="hidden rounded-3xl border border-slate-100 bg-white p-5 shadow-sm sm:p-6">
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <label for="forgot-email" class="block text-xs text-gray-600">E-mail cadastrado</label>
-          <input id="forgot-email" name="email" type="email" required
-                 class="border rounded px-2 py-1 w-full" autocomplete="username" />
+          <h2 class="text-lg font-bold text-slate-900">Folha de ponto</h2>
+          <p class="text-xs text-slate-500">Espelho de ponto e fechamento mensal</p>
         </div>
-        <p id="forgot-msg" class="hidden text-sm text-gray-700" role="status"></p>
-        <div class="flex items-center justify-between">
-          <button type="submit" id="btn-forgot-send" class="px-3 py-1 rounded bg-emerald-600 text-white">Enviar link</button>
-          <button type="button" id="btn-forgot-back" class="text-xs text-gray-600 underline">Voltar ao login</button>
-        </div>
-      </form>
-    </section>
-
-    <section id="user-info" class="hidden bg-white p-4 rounded shadow">
-      <p>Logado como: <span id="user-email" class="font-semibold"></span></p>
-      <p class="text-sm text-gray-600">Perfil: <span id="user-role"></span> · Empresa: <span id="user-company"></span></p>
-    </section>
-
-    <section id="punches-card" class="hidden grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div class="bg-white p-4 rounded shadow">
-        <h2 class="font-semibold mb-3">Meus registros</h2>
-        <div class="space-x-2 mb-3">
-          <button class="btn-punch px-3 py-1 rounded border" data-type="in">Entrada</button>
-          <button class="btn-punch px-3 py-1 rounded border" data-type="break_start">Início pausa</button>
-          <button class="btn-punch px-3 py-1 rounded border" data-type="break_end">Fim pausa</button>
-          <button class="btn-punch px-3 py-1 rounded border" data-type="out">Saída</button>
-        </div>
-        <ul id="punches" class="space-y-1 text-sm"></ul>
+        <span id="stat-company" class="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600"></span>
       </div>
 
-      <div id="map-card" class="bg-white p-4 rounded shadow">
-        <h2 class="font-semibold mb-3">Mapa</h2>
-        <div id="map"></div>
-      </div>
-    </section>
-
-    <!-- Equipe (visível para manager/company_admin/system_admin via JS + RLS no backend) -->
-    <section id="team-card" class="hidden bg-white p-4 rounded shadow">
-      <h2 class="font-semibold mb-3">Minha equipe</h2>
-
-      <div id="team-members" class="space-y-2 mb-4"></div>
-
-      <div class="flex items-end gap-2 mb-3 flex-wrap">
-        <div>
-          <label for="team-user-select" class="block text-xs text-gray-600">Colaborador</label>
-          <select id="team-user-select" class="border rounded px-2 py-1"></select>
-        </div>
-        <div>
-          <label for="filter-start" class="block text-xs text-gray-600">Início</label>
-          <input type="datetime-local" id="filter-start" class="border rounded px-2 py-1" />
-        </div>
-        <div>
-          <label for="filter-end" class="block text-xs text-gray-600">Fim</label>
-          <input type="datetime-local" id="filter-end" class="border rounded px-2 py-1" />
-        </div>
-        <button id="btn-apply-filter" type="button" class="px-3 py-1 rounded bg-gray-800 text-white">Filtrar</button>
-      </div>
-
-      <h3 class="font-medium mb-2">Pontos do colaborador selecionado</h3>
-      <ul id="team-punches" class="space-y-2 text-sm"></ul>
-    </section>
-
-    <!-- Feriados: nacionais (BrasilAPI) + locais da empresa -->
-    <section id="holidays-card" class="hidden bg-white p-4 rounded shadow">
-      <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-        <h2 class="font-semibold">Feriados</h2>
-        <div class="flex items-center gap-2">
-          <label for="holiday-year" class="text-xs text-gray-600">Ano</label>
-          <input id="holiday-year" type="number" min="2000" max="2100" value="2026" class="border rounded px-2 py-1 w-24" />
-          <button id="btn-holidays-reload" type="button" class="px-3 py-1 rounded border">Atualizar</button>
-          <button id="btn-holidays-sync" type="button" class="hidden px-3 py-1 rounded bg-gray-800 text-white">Sincronizar BrasilAPI</button>
-        </div>
-      </div>
-      <ul id="holidays-list" class="space-y-1 text-sm"></ul>
-      <form id="holiday-form" class="hidden mt-3 flex items-end gap-2 flex-wrap">
-        <div>
-          <label for="holiday-date" class="block text-xs text-gray-600">Data (feriado local, ex: 30/11 DF)</label>
-          <input id="holiday-date" type="date" required class="border rounded px-2 py-1" />
-        </div>
-        <div>
-          <label for="holiday-name" class="block text-xs text-gray-600">Nome</label>
-          <input id="holiday-name" type="text" required minlength="2" maxlength="120" placeholder="Dia do Evangélico (DF)" class="border rounded px-2 py-1" />
-        </div>
-        <button type="submit" class="px-3 py-1 rounded bg-emerald-600 text-white">Adicionar local</button>
-      </form>
-      <p class="mt-2 text-xs text-gray-500">Nacionais vêm da BrasilAPI (sincronizado pelo admin). Locais como 30/11 do DF são cadastrados por empresa.</p>
-    </section>
-
-    <!-- Folha: espelho de ponto + fechamento -->
-    <section id="payroll-card" class="hidden bg-white p-4 rounded shadow">
-      <h2 class="font-semibold mb-3">Folha de ponto</h2>
-
-      <div class="flex items-end gap-2 mb-3 flex-wrap">
+      <div class="mb-4 flex flex-wrap items-end gap-3 rounded-2xl bg-slate-50 p-4 no-print">
         <div id="mirror-user-wrap" class="hidden">
-          <label for="mirror-user-select" class="block text-xs text-gray-600">Colaborador</label>
-          <select id="mirror-user-select" class="border rounded px-2 py-1"></select>
+          <label for="mirror-user-select" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Colaborador</label>
+          <select id="mirror-user-select" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-600/20"></select>
         </div>
         <div>
-          <label for="mirror-start" class="block text-xs text-gray-600">Início</label>
-          <input id="mirror-start" type="date" class="border rounded px-2 py-1" />
+          <label for="mirror-start" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Início</label>
+          <input id="mirror-start" type="date" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-600/20"/>
         </div>
         <div>
-          <label for="mirror-end" class="block text-xs text-gray-600">Fim</label>
-          <input id="mirror-end" type="date" class="border rounded px-2 py-1" />
+          <label for="mirror-end" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Fim</label>
+          <input id="mirror-end" type="date" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-600/20"/>
         </div>
         <div>
-          <label for="mirror-expected" class="block text-xs text-gray-600">Jornada/dia (min)</label>
-          <input id="mirror-expected" type="number" min="0" max="1440" value="480" class="border rounded px-2 py-1 w-24" />
+          <label for="mirror-expected" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Jornada/dia (min)</label>
+          <input id="mirror-expected" type="number" min="0" max="1440" value="480"
+                 class="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-600/20"/>
         </div>
-        <button id="btn-mirror" type="button" class="px-3 py-1 rounded bg-gray-800 text-white">Gerar espelho</button>
+        <button id="btn-mirror" type="button"
+                class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 active:scale-[0.98]">
+          Gerar espelho
+        </button>
+        <button id="btn-print-mirror" type="button"
+                class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-[0.98]">
+          Imprimir / PDF
+        </button>
       </div>
-      <p id="mirror-totals" class="text-sm mb-2"></p>
+
+      <p id="mirror-totals" class="mb-3 rounded-xl bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-900"></p>
+
       <div class="overflow-x-auto">
-        <table class="text-sm w-full">
+        <table class="min-w-full text-sm">
           <thead>
-            <tr class="text-left text-gray-600">
-              <th class="pr-2">Data</th><th class="pr-2">Status</th><th class="pr-2">Previsto</th>
-              <th class="pr-2">Trabalhado</th><th class="pr-2">Extra</th><th class="pr-2">Falta</th><th>Batidas</th>
+            <tr class="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <th class="px-3 py-2.5">Data</th>
+              <th class="px-3 py-2.5">Status</th>
+              <th class="px-3 py-2.5">Previsto</th>
+              <th class="px-3 py-2.5">Trabalhado</th>
+              <th class="px-3 py-2.5">Extra</th>
+              <th class="px-3 py-2.5">Falta</th>
+              <th class="px-3 py-2.5">Batidas</th>
             </tr>
           </thead>
           <tbody id="mirror-table-body"></tbody>
         </table>
       </div>
 
-      <div id="close-wrap" class="hidden mt-4 pt-3 border-t">
-        <h3 class="font-medium mb-2">Fechamento da folha (admin)</h3>
-        <form id="close-form" class="flex items-end gap-2 flex-wrap">
+      <div id="close-wrap" class="no-print mt-6 hidden border-t border-slate-100 pt-5">
+        <h3 class="mb-3 text-sm font-bold text-slate-900">Fechamento da folha (admin)</h3>
+        <form id="close-form" class="flex flex-wrap items-end gap-3">
           <div>
-            <label for="close-start" class="block text-xs text-gray-600">Período início</label>
-            <input id="close-start" type="date" required class="border rounded px-2 py-1" />
+            <label for="close-start" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Período início</label>
+            <input id="close-start" type="date" required class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-600/20"/>
           </div>
           <div>
-            <label for="close-end" class="block text-xs text-gray-600">Período fim</label>
-            <input id="close-end" type="date" required class="border rounded px-2 py-1" />
+            <label for="close-end" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Período fim</label>
+            <input id="close-end" type="date" required class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-600/20"/>
           </div>
-          <button type="submit" class="px-3 py-1 rounded bg-emerald-600 text-white">Fechar folha</button>
+          <button type="submit" class="rounded-xl bg-amber-400 px-5 py-2 text-sm font-bold text-slate-900 shadow-lg shadow-amber-400/30 transition hover:bg-amber-500 active:scale-[0.98]">
+            Fechar folha
+          </button>
         </form>
-        <ul id="closings-list" class="space-y-1 text-sm mt-2"></ul>
+        <ul id="closings-list" class="mt-4 space-y-2"></ul>
       </div>
     </section>
-  </div>
+  </main>
 
   <script src="/static/js/app.js"></script>
 </body>
