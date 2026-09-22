@@ -90,8 +90,9 @@ Regras por perfil:
 - **manager/company_admin (Gestor)**: equipe completa, editar horário/nota de
   batidas, aprovar/rejeitar justificativas, fechar folha antes do PDF.
 - **admin/system_admin (Administrador/Suporte)**: não vê botões de marcação
-  (só o relógio). Painel Admin com Instituições/Empresas por CNPJ, árvore de
-  colaboradores, marcações e histórico de auditoria.
+  (só o relógio); a API também rejeita batida desse perfil (`/api/clock` → 403).
+  Painel Admin com Instituições/Empresas por CNPJ, árvore de colaboradores,
+  marcações e histórico de auditoria.
 - **Multi-empresa**: gestores com mais de um vínculo veem o seletor no cabeçalho;
   o backend valida `user_companies` e troca o escopo via `X-Company-ID`.
 

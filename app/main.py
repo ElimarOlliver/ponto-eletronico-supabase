@@ -715,6 +715,11 @@ def api_clock(
     x_company_id: Optional[str] = Header(default=None),
 ):
     sb, me, _ = resolve_auth(request, authorization, x_company_id)
+    # Perfil Admin (Programador/Suporte) não bate ponto: os botões ficam
+    # ocultos no front e esta guarda protege a API também (defesa em
+    # profundidade — só o relógio/leitura interessa para esse perfil).
+    if me.get("role") in SYSTEM_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Administrador/Suporte não registra ponto")
     # S6: anti-spam de batida via API (20/min por usuário; trigger cobre o resto).
     rate_limit(request, "clock", 20, 60, key=str(me["id"]))
     body = {
@@ -868,7 +873,7 @@ def _get_punch_or_403(sb: Client, punch_id: int, me: dict) -> dict:
     if not row:
         raise HTTPException(status_code=404, detail="Punch não encontrado ou sem permissão")
     if (
-        me.get("role") != "system_admin"
+        me.get("role") not in ("system_admin", "admin")
         and me.get("company_id")
         and row.get("company_id")
         and row.get("company_id") != me.get("company_id")
