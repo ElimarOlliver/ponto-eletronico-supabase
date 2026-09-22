@@ -233,7 +233,9 @@ BEGIN
   RETURNING * INTO v_new;
 
   -- Resolve identidade do autor (e-mail real) e do colaborador alterado
-  SELECT role::text, email INTO v_role, v_email
+  -- ATENÇÃO: 'role' existe em profiles E em auth.users — qualificar SEMPRE
+  -- (sem alias -> 42702 "column reference role is ambiguous" em runtime).
+  SELECT pr.role::text, u.email INTO v_role, v_email
   FROM public.profiles pr JOIN auth.users u ON u.id = pr.id
   WHERE pr.id = p_actor_id;
 
@@ -295,7 +297,8 @@ BEGIN
   WHERE id = p_punch_id
   RETURNING * INTO v_new;
 
-  SELECT role::text, email INTO v_role, v_email
+  -- 'role' existe em profiles E em auth.users — qualificar (evita 42702).
+  SELECT pr.role::text, u.email INTO v_role, v_email
   FROM public.profiles pr JOIN auth.users u ON u.id = pr.id
   WHERE pr.id = p_actor_id;
 
