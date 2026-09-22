@@ -89,8 +89,28 @@ Regras por perfil:
   registros de hoje e histórico simples da semana. **Sem nenhuma edição.**
 - **manager/company_admin (Gestor)**: equipe completa, editar horário/nota de
   batidas, aprovar/rejeitar justificativas, fechar folha antes do PDF.
+- **admin/system_admin (Administrador/Suporte)**: não vê botões de marcação
+  (só o relógio). Painel Admin com Instituições/Empresas por CNPJ, árvore de
+  colaboradores, marcações e histórico de auditoria.
 - **Multi-empresa**: gestores com mais de um vínculo veem o seletor no cabeçalho;
   o backend valida `user_companies` e troca o escopo via `X-Company-ID`.
+
+### Auditoria legal das alterações de ponto (Regra de Ouro)
+Toda alteração (editar horário/observação, aprovar/recusar) passa por funções
+SQL transacionais (`update_punch_with_audit` / `approve_punch_with_audit`):
+`UPDATE` no ponto + `INSERT` em `logs_auditoria` **na mesma transação** do
+banco. O log grava quem alterou (e-mail + nível de permissão), quem foi
+alterado, valores antigo/novo, data/hora e justificativa obrigatória — sem
+policy de escrita para `authenticated` (imutável pelo usuário). O backend
+tenta a RPC e cai no caminho legado (trigger `punch_audit`) enquanto a
+migração não for aplicada.
+
+1. Rode [`migration_auditoria_logs.sql`](./migration_auditoria_logs.sql) no SQL Editor
+   (idempotente; corrige as policies antigas ancoradas em `my_company_id()`,
+   que negavam/invisibilizavam os logs de usuários multi-empresa como
+   Milena/josé — veja [`docs/auditoria_legal.md`](./docs/auditoria_legal.md)).
+2. Diagnóstico: [`queries_investigacao_logs.sql`](./queries_investigacao_logs.sql)
+   (perfil × empresa vinculada × policies × testes de RLS).
 
 Isolamento: header `X-Company-ID` de empresa fora do `user_companies` do usuário dá 403.
 
@@ -124,14 +144,17 @@ app/
 web/                        # Frontend React (Vite + TypeScript + Tailwind v4 + Leaflet)
   src/
     components/             # Header, LoginCard, PunchCard, WeekMetrics, PunchLists,
-                            # PunchMap, TeamPanel, HolidaysPanel, PayrollPanel, Dashboard
+                            # PunchMap, TeamPanel, AdminPanel, HolidaysPanel, PayrollPanel, Dashboard
     state/AuthContext.tsx   # sessão + empresa ativa (X-Company-ID) sem relogin
     lib/                    # supabase.ts (client via /api/config) + api.ts + utils.ts
     types.ts                # tipos 1:1 com as respostas da API
   dist/                     # build servido em / (gerado por `npm run build`)
 supabase.sql                      # schema SaaS (tenants, RLS, triggers, holidays)
 migration_multi_company.sql       # user_companies + helpers + RLS (multi-empresa)
+migration_auditoria_logs.sql      # logs_auditoria + RPCs transacionais + correção RLS
+queries_investigacao_logs.sql     # diagnóstico do bug de auditoria (RLS/escopo)
 seed.sql                          # contas de teste (Senha123!) + multi-empresa
+docs/auditoria_legal.md           # análise: bug, perfis, modelo de auditoria
 requirements.txt
 .env.example
 ```

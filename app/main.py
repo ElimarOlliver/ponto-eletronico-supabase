@@ -179,6 +179,8 @@ def rate_limit(request: Request, scope: str, max_hits: int, window_s: int, key: 
 
 MANAGER_ROLES = {"manager", "company_admin", "system_admin", "admin"}
 COMPANY_ADMIN_ROLES = {"company_admin", "system_admin", "admin"}
+# Perfil "Administrador (Programador/Suporte)": enxerga TODAS as empresas.
+SYSTEM_ADMIN_ROLES = {"system_admin", "admin"}
 VALID_PUNCH_TYPES = {"in", "out", "break_start", "break_end"}
 
 
@@ -471,6 +473,8 @@ class PunchUpdate(BaseModel):
     id: int
     note: Optional[str] = Field(default=None, max_length=500)
     occurred_at: Optional[datetime] = None
+    # Regra de Ouro (legalidade): toda alteração exige justificativa que acompanha o log.
+    justificativa: Optional[str] = Field(default=None, max_length=500)
 
     @field_validator("occurred_at")
     @classmethod
@@ -490,6 +494,7 @@ class PunchUpdate(BaseModel):
 class PunchApprove(BaseModel):
     id: int
     decision: Literal["approved", "rejected"]
+    justificativa: Optional[str] = Field(default=None, max_length=500)
 
 
 class HolidayCreate(BaseModel):
@@ -741,6 +746,12 @@ def _require_manager(prof: dict) -> None:
         raise HTTPException(status_code=403, detail="Somente manager/admin")
 
 
+def _require_system_admin(prof: dict) -> None:
+    """Middleware de perfil Admin (Programador/Suporte): enxerga todas as empresas."""
+    if prof.get("role") not in SYSTEM_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Somente admin do sistema")
+
+
 @app.get("/api/team")
 def api_team(
     request: Request,
@@ -866,6 +877,42 @@ def _get_punch_or_403(sb: Client, punch_id: int, me: dict) -> dict:
     return row
 
 
+def _rpc_audit(sb: Client, fn: str, params: dict) -> Any:
+    """Invoca uma função SQL de auditoria transacional (RPC).
+
+    Garantia do caminho "auditado": o UPDATE do ponto e o INSERT no
+    logs_auditoria rodam na MESMA transação dentro do Postgres —
+    ou os dois acontecem, ou nenhum (atomicidade).
+
+    - Função inexistente (migração_auditoria_logs.sql ainda não aplicada):
+      retorna None -> o chamador usa o caminho legado (trigger punch_audit).
+    - Função existente com erro de negócio: relança como HTTP 400 (não mascara).
+    """
+    if sb is None:
+        return None
+    try:
+        res = sb.rpc(fn, params).execute()
+        return res.data
+    except Exception as e:
+        # PGRST202 = função não existe no banco (migração ainda não aplicada).
+        # A checagem é pela mensagem/código, não por .status (nem todo APIError
+        # do postgrest expõe `status` de forma confiável).
+        msg = str(e).lower()
+        if "pgrst202" in msg or ("could not find the function" in msg and "schema cache" in msg):
+            logger.warning("Auditoria SQL ausente no banco (RPC %s) — caminho legado ativo", fn)
+            return None
+        raise HTTPException(status_code=400, detail=user_safe_error(e, "Falha na operação de auditoria")) from e
+
+
+def _as_punch(data: Any) -> Optional[dict]:
+    """Normaliza o retorno da RPC (jsonb único ou lista) para um dict de ponto."""
+    if isinstance(data, list):
+        return data[0] if data else None
+    if isinstance(data, dict):
+        return data
+    return None
+
+
 @app.post("/api/punch-update")
 def api_punch_update(
     payload: PunchUpdate,
@@ -877,14 +924,37 @@ def api_punch_update(
     _require_manager(me)
     _get_punch_or_403(sb, payload.id, me)
 
+    occurred = payload.occurred_at.isoformat() if payload.occurred_at is not None else None
+
+    # 1) Caminho transacional com auditoria legal: update_punch_with_audit(...)
+    #    faz UPDATE + INSERT em logs_auditoria na mesma transação do banco,
+    #    gravando quem (e-mail + nível de permissão), o quê (antigo/novo) e a
+    #    justificativa — funciona também na empresa alternada (multi-empresa).
+    updated = _rpc_audit(
+        sb,
+        "update_punch_with_audit",
+        {
+            "p_punch_id": payload.id,
+            "p_occurred_at": occurred,
+            "p_note": payload.note,
+            "p_justificativa": payload.justificativa,
+            "p_actor_id": me["id"],
+        },
+    )
+    row = _as_punch(updated)
+    if row:
+        return {"ok": True, "punch": row}
+
+    # 2) Fallback pré-migração (função SQL não aplicada): update direto, com o
+    #    trigger punch_audit continuando a registrar old/new/actor.
     patch: dict[str, Any] = {
         "edited_by": me["id"],
         "edited_at": datetime.now(timezone.utc).isoformat(),
     }
     if payload.note is not None:
         patch["note"] = payload.note
-    if payload.occurred_at is not None:
-        patch["occurred_at"] = payload.occurred_at.isoformat()
+    if occurred is not None:
+        patch["occurred_at"] = occurred
 
     try:
         updated = sb.table("punches").update(patch).eq("id", payload.id).execute().data
@@ -909,6 +979,24 @@ def api_punch_approve(
     _get_punch_or_403(sb, payload.id, me)
 
     now_iso = datetime.now(timezone.utc).isoformat()
+
+    # 1) Caminho transacional com auditoria legal: aprovação/recusa + log na
+    #    mesma transação (funciona também na empresa alternada / multi-empresa).
+    approved = _rpc_audit(
+        sb,
+        "approve_punch_with_audit",
+        {
+            "p_punch_id": payload.id,
+            "p_decision": payload.decision,
+            "p_justificativa": payload.justificativa,
+            "p_actor_id": me["id"],
+        },
+    )
+    row = _as_punch(approved)
+    if row:
+        return {"ok": True, "punch": row}
+
+    # 2) Fallback pré-migração (função SQL não aplicada).
     patch = {
         "approval_status": payload.decision,
         "approved_by": me["id"],
@@ -925,6 +1013,195 @@ def api_punch_approve(
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=user_safe_error(e, "Falha ao aprovar/rejeitar")) from e
+
+
+# ----------------------------
+# API - painel do Administrador (Programador/Suporte)
+# Instituições/Empresas por CNPJ -> árvore de colaboradores -> pontos + logs.
+# Toda alteração feita aqui passa por /api/punch-update e /api/punch-approve,
+# que gravam o log de auditoria (logs_auditoria).
+# ----------------------------
+@app.get("/api/admin/companies")
+def api_admin_companies(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_company_id: Optional[str] = Header(default=None),
+):
+    """Lista todas as Instituições/Empresas cadastradas por CNPJ (Admin)."""
+    sb, me, _ = resolve_auth(request, authorization, x_company_id)
+    _require_system_admin(me)
+    src = sb_admin if sb_admin is not None else sb
+    try:
+        data = (
+            src.table("companies")
+            .select("id,cnpj,nome,ativa,created_at")
+            .order("nome")
+            .limit(100)
+            .execute()
+            .data
+        )
+        out = []
+        for c in data or []:
+            colab = None
+            try:
+                res = (
+                    src.table("profiles")
+                    .select("id", count="exact")
+                    .eq("company_id", c.get("id"))
+                    .execute()
+                )
+                colab = res.count
+            except Exception:
+                colab = None
+            out.append(
+                {
+                    "id": c.get("id"),
+                    "cnpj": normalize_cnpj(c.get("cnpj")),
+                    "nome": c.get("nome"),
+                    "ativa": c.get("ativa", True),
+                    "created_at": c.get("created_at"),
+                    "colaborador_count": colab,
+                }
+            )
+        return out
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=user_safe_error(e, "Falha ao listar empresas")) from e
+
+
+@app.get("/api/admin/companies/{company_id}/team")
+def api_admin_company_team(
+    company_id: str,
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_company_id: Optional[str] = Header(default=None),
+):
+    """Árvore de colaboradores atrelados a um CNPJ (Admin)."""
+    sb, me, _ = resolve_auth(request, authorization, x_company_id)
+    _require_system_admin(me)
+    src = sb_admin if sb_admin is not None else sb
+    try:
+        comp = (
+            src.table("companies")
+            .select("id,nome,cnpj,ativa")
+            .eq("id", company_id)
+            .single()
+            .execute()
+            .data
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada")
+    if not comp:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada")
+
+    try:
+        profiles = (
+            src.table("profiles")
+            .select("id,full_name,role,manager_id,company_id")
+            .eq("company_id", company_id)
+            .order("full_name")
+            .limit(500)
+            .execute()
+            .data
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=user_safe_error(e, "Falha ao listar equipe")) from e
+
+    # E-mails: auth.users só é legível com service key (best-effort).
+    # Usa o Admin API do GoTrue (/auth/v1/admin/users) — confiável com service key.
+    emails: dict[str, str] = {}
+    if sb_admin is not None and profiles:
+        try:
+            uids = {p["id"] for p in profiles}
+            r = httpx.get(
+                f"{SUPABASE_URL}/auth/v1/admin/users?per_page=1000",
+                headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+                timeout=15.0,
+            )
+            if r.status_code == 200:
+                body = r.json()
+                users = body.get("users", body) if isinstance(body, dict) else body
+                for u in users or []:
+                    if isinstance(u, dict) and u.get("id") in uids:
+                        emails[u["id"]] = u.get("email") or ""
+        except Exception:
+            logger.warning("Falha ao resolver e-mails via Admin API (service key?)")
+    for p in profiles or []:
+        p["email"] = emails.get(p.get("id"))
+
+    return {"company": comp, "team": profiles or []}
+
+
+@app.get("/api/admin/companies/{company_id}/punches")
+def api_admin_company_punches(
+    company_id: str,
+    request: Request,
+    user_id: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    limit: int = 50,
+    authorization: Optional[str] = Header(default=None),
+    x_company_id: Optional[str] = Header(default=None),
+):
+    """Pontos de colaboradores de um CNPJ (Admin), com edição via /api/punch-update."""
+    sb, me, _ = resolve_auth(request, authorization, x_company_id)
+    _require_system_admin(me)
+    src = sb_admin if sb_admin is not None else sb
+    limit = max(1, min(limit, 200))
+    start = _parse_filter_dt(start, "start")
+    end = _parse_filter_dt(end, "end")
+    try:
+        q = src.table("punches").select("*").eq("company_id", company_id)
+        if user_id:
+            q = q.eq("user_id", user_id)
+        if start:
+            q = q.gte("occurred_at", start)
+        if end:
+            q = q.lte("occurred_at", end)
+        data = q.order("occurred_at", desc=True).limit(limit).execute().data
+        return data or []
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=user_safe_error(e, "Falha ao listar pontos")) from e
+
+
+@app.get("/api/admin/companies/{company_id}/logs")
+def api_admin_company_logs(
+    company_id: str,
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_company_id: Optional[str] = Header(default=None),
+):
+    """Histórico de auditoria de uma empresa (Admin/gestor com acesso).
+
+    serve os logs_auditoria (função transacional) com e-mail, permissão,
+    valores antigo/novo e justificativa; pré-migração cai no punch_audit.
+    """
+    sb, me, _ = resolve_auth(request, authorization, x_company_id)
+    _require_manager(me)
+    ids = {str(c.get("id")) for c in (me.get("companies") or []) if c.get("id")}
+    if me.get("role") not in SYSTEM_ADMIN_ROLES and company_id not in ids:
+        raise HTTPException(status_code=403, detail="Sem acesso aos logs desta empresa")
+
+    logs = _rpc_audit(sb, "get_audit_logs", {"p_empresa_id": company_id})
+    if logs is not None:
+        return logs if isinstance(logs, list) else [logs]
+
+    # Fallback pré-migração: punch_audit da empresa (old/new/actor/created_at).
+    try:
+        src = sb
+        if me.get("is_switched") and sb_admin is not None:
+            src = sb_admin
+        rows = (
+            src.table("punch_audit")
+            .select("punch_id,action,old_row,new_row,actor,company_id,at")
+            .eq("company_id", company_id)
+            .order("at", desc=True)
+            .limit(500)
+            .execute()
+            .data
+        )
+        return rows or []
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=user_safe_error(e, "Falha ao consultar auditoria")) from e
 
 
 # ----------------------------

@@ -1,4 +1,14 @@
-import type { Closing, Holiday, Me, Punch, TeamMember, Timesheet } from '../types'
+import type {
+  AdminCompany,
+  AdminTeamResponse,
+  AuditLog,
+  Closing,
+  Holiday,
+  Me,
+  Punch,
+  TeamMember,
+  Timesheet,
+} from '../types'
 import { getSupabase } from './supabase'
 
 // *COMPANY SWITCH*
@@ -87,15 +97,43 @@ export const api = {
       withQuery('/api/team-punches', { user_id: userId, start, end, limit }),
     ).then(handle<Punch[]>),
 
-  punchApprove: (id: number, decision: string) =>
-    authFetch('/api/punch-approve', { method: 'POST', body: { id, decision } }).then(
-      handle<{ ok: boolean }>,
-    ),
+  punchApprove: (id: number, decision: string, justificativa?: string) =>
+    authFetch('/api/punch-approve', {
+      method: 'POST',
+      body: { id, decision, justificativa: justificativa ?? null },
+    }).then(handle<{ ok: boolean }>),
 
-  punchUpdate: (id: number, patch: { note?: string | null; occurred_at?: string }) =>
-    authFetch('/api/punch-update', { method: 'POST', body: { id, ...patch } }).then(
-      handle<{ ok: boolean }>,
-    ),
+  punchUpdate: (
+    id: number,
+    patch: { note?: string | null; occurred_at?: string },
+    justificativa?: string,
+  ) =>
+    authFetch('/api/punch-update', {
+      method: 'POST',
+      body: { id, ...patch, justificativa: justificativa ?? null },
+    }).then(handle<{ ok: boolean }>),
+
+  // --- Painel Admin (Programador/Suporte) ---
+  adminCompanies: () => authFetch('/api/admin/companies').then(handle<AdminCompany[]>),
+
+  adminTeam: (companyId: string) =>
+    authFetch(`/api/admin/companies/${companyId}/team`).then(handle<AdminTeamResponse>),
+
+  adminPunches: (
+    companyId: string,
+    opts: { user_id?: string; start?: string; end?: string; limit?: number },
+  ) =>
+    authFetch(
+      withQuery(`/api/admin/companies/${companyId}/punches`, {
+        user_id: opts.user_id,
+        start: opts.start,
+        end: opts.end,
+        limit: opts.limit ?? 50,
+      }),
+    ).then(handle<Punch[]>),
+
+  adminLogs: (companyId: string) =>
+    authFetch(`/api/admin/companies/${companyId}/logs`).then(handle<AuditLog[]>),
 
   timesheet: (opts: { user_id?: string; start: string; end: string; expected_daily_min?: number }) =>
     authFetch(

@@ -11,6 +11,9 @@ interface Props {
   todayPunches: Punch[]
   punching: PunchType | null
   onPunch: (type: PunchType) => void
+  // Perfil Admin (Programador/Suporte): não bate ponto — mostra apenas o
+  // relógio/horário atual e oculta os botões de marcação.
+  readOnly?: boolean
 }
 
 const BUTTONS: { type: PunchType; cls: string; icon: 'in' | 'break' | 'out' }[] = [
@@ -38,7 +41,7 @@ function OutIcon({ className }: { className?: string }) {
   )
 }
 
-export default function PunchCard({ todayPunches, punching, onPunch }: Props) {
+export default function PunchCard({ todayPunches, punching, onPunch, readOnly = false }: Props) {
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 1000)
@@ -52,7 +55,7 @@ export default function PunchCard({ todayPunches, punching, onPunch }: Props) {
 
   return (
     <section className="overflow-hidden rounded-3xl bg-gradient-to-br from-blue-950 via-blue-900 to-blue-950 shadow-2xl shadow-blue-950/20 ring-1 ring-white/10 print:hidden">
-      <div className="grid gap-6 p-6 sm:p-8 md:grid-cols-[1.1fr_1fr] md:items-center">
+      <div className={`grid gap-6 p-6 sm:p-8 ${readOnly ? '' : 'md:grid-cols-[1.1fr_1fr] md:items-center'}`}>
         <div>
           <div className="flex items-center gap-2">
             <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ring-1 ${summary.cls}`}>
@@ -73,37 +76,51 @@ export default function PunchCard({ todayPunches, punching, onPunch }: Props) {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          {BUTTONS.map((b) => {
-            const isSuggested = b.type === suggested
-            return (
-              <button
-                key={b.type}
-                onClick={() => onPunch(b.type)}
-                disabled={punching !== null}
-                className={`btn-punch relative flex h-20 flex-col items-center justify-center gap-1 rounded-2xl bg-gradient-to-br text-sm font-bold shadow-lg transition active:scale-[0.98] sm:h-24 ${b.cls} ${
-                  isSuggested
-                    ? 'ring-2 ring-white/60 ring-offset-2 ring-offset-blue-950'
-                    : ''
-                }`}
-              >
-                {b.icon === 'in' ? (
-                  <ZapIcon className="h-5 w-5" />
-                ) : b.icon === 'break' ? (
-                  <BreakIcon className="h-5 w-5" />
-                ) : (
-                  <OutIcon className="h-5 w-5" />
-                )}
-                <span className="px-1 text-center leading-tight">{punchLabel(b.type)}</span>
-              </button>
-            )
-          })}
-        </div>
+        {readOnly ? (
+          <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-5 py-4">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-400/90 text-blue-950">
+              <ClockIcon className="h-5 w-5" />
+            </span>
+            <p className="text-sm font-medium leading-snug text-blue-100/80">
+              Perfil Administrador — a marcação de ponto está oculta. Você gerencia as
+              empresas, colaboradores e o histórico de auditoria abaixo.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            {BUTTONS.map((b) => {
+              const isSuggested = b.type === suggested
+              return (
+                <button
+                  key={b.type}
+                  onClick={() => onPunch(b.type)}
+                  disabled={punching !== null}
+                  className={`btn-punch relative flex h-20 flex-col items-center justify-center gap-1 rounded-2xl bg-gradient-to-br text-sm font-bold shadow-lg transition active:scale-[0.98] sm:h-24 ${b.cls} ${
+                    isSuggested
+                      ? 'ring-2 ring-white/60 ring-offset-2 ring-offset-blue-950'
+                      : ''
+                  }`}
+                >
+                  {b.icon === 'in' ? (
+                    <ZapIcon className="h-5 w-5" />
+                  ) : b.icon === 'break' ? (
+                    <BreakIcon className="h-5 w-5" />
+                  ) : (
+                    <OutIcon className="h-5 w-5" />
+                  )}
+                  <span className="px-1 text-center leading-tight">{punchLabel(b.type)}</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
 
-      <div className="border-t border-white/10 bg-white/5 px-6 py-2.5 text-center text-xs font-medium text-blue-100/70 sm:px-8">
-        {punching !== null ? 'Registrando marcação…' : 'Botão destacado = próxima marcação sugerida'}
-      </div>
+      {!readOnly && (
+        <div className="border-t border-white/10 bg-white/5 px-6 py-2.5 text-center text-xs font-medium text-blue-100/70 sm:px-8">
+          {punching !== null ? 'Registrando marcação…' : 'Botão destacado = próxima marcação sugerida'}
+        </div>
+      )}
     </section>
   )
 }

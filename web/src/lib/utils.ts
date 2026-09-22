@@ -16,6 +16,8 @@ export const punchLabel = (t: string): string => PUNCH_LABELS[t] ?? t
 
 export const MANAGER_ROLES = new Set(['manager', 'company_admin', 'system_admin', 'admin'])
 export const COMPANY_ADMIN_ROLES = new Set(['company_admin', 'system_admin', 'admin'])
+// Perfil "Administrador (Programador/Suporte)": Painel Admin com todas as empresas.
+export const PLATFORM_ADMIN_ROLES = new Set(['system_admin', 'admin'])
 
 const TZ = 'America/Sao_Paulo'
 

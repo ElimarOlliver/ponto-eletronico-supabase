@@ -76,8 +76,30 @@ export default function TeamPanel() {
     }
   }
 
-  const approve = (p: Punch) => runAction(p, () => api.punchApprove(p.id, 'approved'))
-  const reject = (p: Punch) => runAction(p, () => api.punchApprove(p.id, 'rejected'))
+  const askJustification = (action: string): string | null => {
+    const j = prompt(
+      `${action} — Justificativa obrigatória (fica gravada no histórico de auditoria):`,
+      '',
+    )
+    if (j === null) return null
+    const clean = j.trim()
+    if (!clean) {
+      alert('A justificativa é obrigatória para registrar a alteração.')
+      return null
+    }
+    return clean.slice(0, 500)
+  }
+
+  const approve = (p: Punch) => {
+    const j = askJustification('Aprovar marcação')
+    if (j === null) return
+    runAction(p, () => api.punchApprove(p.id, 'approved', j))
+  }
+  const reject = (p: Punch) => {
+    const j = askJustification('Recusar marcação')
+    if (j === null) return
+    runAction(p, () => api.punchApprove(p.id, 'rejected', j))
+  }
 
   const editTime = (p: Punch) => {
     const raw = prompt('Novo horário (formato: yyyy-mm-ddThh:mm ou yyyy-mm-dd hh:mm):', p.occurred_at)
@@ -87,13 +109,17 @@ export default function TeamPanel() {
       alert('Formato inválido. Use yyyy-mm-ddThh:mm.')
       return
     }
-    void runAction(p, () => api.punchUpdate(p.id, { occurred_at: normalized }))
+    const j = askJustification('Alterar horário')
+    if (j === null) return
+    void runAction(p, () => api.punchUpdate(p.id, { occurred_at: normalized }, j))
   }
 
   const editNote = (p: Punch) => {
     const note = prompt('Observação (vazio para limpar):', p.note ?? '')
     if (note === null) return
-    void runAction(p, () => api.punchUpdate(p.id, { note: note.trim() }))
+    const j = askJustification('Alterar observação')
+    if (j === null) return
+    void runAction(p, () => api.punchUpdate(p.id, { note: note.trim() }, j))
   }
 
   const selectedMember = members.find((m) => m.id === selected)

@@ -99,3 +99,41 @@ export interface Closing {
   closed_by?: string;
   created_at?: string;
 }
+
+// --- Auditoria legal (logs_auditoria) ---
+// Registro imutável de cada alteração: quem (e-mail + nível de permissão),
+// quem foi alterado, valores antigo/novo e justificativa.
+export interface AuditLog {
+  id: number;
+  punch_id?: number | null;
+  empresa_id?: string | null;
+  alterado_por?: string | null;
+  alterado_por_email?: string | null;
+  alterado_por_role?: string | null;
+  usuario_alterado?: string | null;
+  usuario_alterado_nome?: string | null;
+  acao?: string;
+  valor_antigo?: unknown;
+  valor_novo?: unknown;
+  justificativa?: string | null;
+  created_at?: string;
+}
+
+// --- Painel Admin (Programador/Suporte) ---
+export interface AdminCompany {
+  id: string;
+  cnpj: string;
+  nome?: string | null;
+  ativa?: boolean;
+  created_at?: string;
+  colaborador_count?: number | null;
+}
+
+export interface AdminTeamMember extends TeamMember {
+  email?: string | null;
+}
+
+export interface AdminTeamResponse {
+  company: { id: string; nome?: string; cnpj?: string; ativa?: boolean };
+  team: AdminTeamMember[];
+}

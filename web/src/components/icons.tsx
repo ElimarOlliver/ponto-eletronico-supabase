@@ -150,3 +150,22 @@ export function EyeIcon({ className }: IconProps) {
     </>
   ))
 }
+
+export function BuildingIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <rect x="4" y="3" width="16" height="18" rx="2" />
+      <path d="M9 7h1M14 7h1M9 11h1M14 11h1M9 15h1M14 15h1" />
+      <path d="M2 21h20" />
+    </>
+  ))
+}
+
+export function ShieldIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <path d="M12 2l8 3.5v5.5c0 5-3.4 8.8-8 10.5-4.6-1.7-8-5.5-8-10.5V5.5z" />
+      <path d="M9 12l2 2 4-4" />
+    </>
+  ))
+}

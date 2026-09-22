@@ -2,17 +2,28 @@ import { useCallback, useEffect, useState } from 'react'
 import type { Punch, PunchType, TimesheetDay, TimesheetTotals } from '../types'
 import { useAuth } from '../state/AuthContext'
 import { api, ApiError } from '../lib/api'
-import { COMPANY_ADMIN_ROLES, MANAGER_ROLES, dayKeyOf, mondayOfWeek, todayISO } from '../lib/utils'
+import {
+  COMPANY_ADMIN_ROLES,
+  MANAGER_ROLES,
+  PLATFORM_ADMIN_ROLES,
+  dayKeyOf,
+  mondayOfWeek,
+  todayISO,
+} from '../lib/utils'
 import PunchCard from './PunchCard'
 import WeekMetrics from './WeekMetrics'
 import PunchLists from './PunchLists'
 import TeamPanel from './TeamPanel'
+import AdminPanel from './AdminPanel'
 import HolidaysPanel from './HolidaysPanel'
 import PayrollPanel from './PayrollPanel'
 
 // *DASHBOARD*
-// Operador: hero + métricas + listas (mínimo). Gestor: + equipe, feriados,
-// folha de ponto e mapa. Dados recarregados ao trocar de empresa.
+// Operador: hero + métricas + listas (mínimo).
+// Gestor: + equipe, feriados, folha de ponto e mapa.
+// Administrador (Programador/Suporte): NÃO bate ponto — vê apenas o relógio
+// e o Painel Admin (empresas por CNPJ, colaboradores, pontos e auditoria).
+// Dados recarregados ao trocar de empresa.
 
 export default function Dashboard() {
   const { me } = useAuth()
@@ -22,6 +33,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [punching, setPunching] = useState<PunchType | null>(null)
   const [punchMsg, setPunchMsg] = useState<string | null>(null)
+
+  const isPlatformAdmin = me ? PLATFORM_ADMIN_ROLES.has(me.role) : false
 
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -78,8 +91,13 @@ export default function Dashboard() {
   )
 
   useEffect(() => {
+    // Perfil Admin não consome punche/timesheet próprio (não bate ponto).
+    if (isPlatformAdmin) {
+      setLoading(false)
+      return
+    }
     void loadAll()
-  }, [loadAll, me?.id])
+  }, [loadAll, me?.id, isPlatformAdmin])
 
   const todayKey = dayKeyOf(new Date().toISOString())
   const todayPunches = punches.filter((p) => dayKeyOf(p.occurred_at) === todayKey)
@@ -89,31 +107,42 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <PunchCard todayPunches={todayPunches} punching={punching} onPunch={doPunch} />
+      <PunchCard
+        todayPunches={todayPunches}
+        punching={punching}
+        onPunch={doPunch}
+        readOnly={isPlatformAdmin}
+      />
 
-      {punchMsg && (
-        <div
-          className={`rounded-2xl border px-4 py-3 text-sm font-semibold shadow-sm ${
-            punchMsg.startsWith('✓')
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-              : 'border-rose-200 bg-rose-50 text-rose-700'
-          }`}
-        >
-          {punchMsg}
-        </div>
-      )}
-
-      <WeekMetrics totals={totals} loading={loading} />
-      <PunchLists punches={punches} week={week} loading={loading} />
-
-      {isManager && (
+      {isPlatformAdmin ? (
+        <AdminPanel />
+      ) : (
         <>
-          <TeamPanel />
-          <HolidaysPanel isAdmin={isAdmin} />
+          {punchMsg && (
+            <div
+              className={`rounded-2xl border px-4 py-3 text-sm font-semibold shadow-sm ${
+                punchMsg.startsWith('✓')
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-rose-200 bg-rose-50 text-rose-700'
+              }`}
+            >
+              {punchMsg}
+            </div>
+          )}
+
+          <WeekMetrics totals={totals} loading={loading} />
+          <PunchLists punches={punches} week={week} loading={loading} />
+
+          {isManager && (
+            <>
+              <TeamPanel />
+              <HolidaysPanel isAdmin={isAdmin} />
+            </>
+          )}
+
+          {isManager && <PayrollPanel role={me!.role} />}
         </>
       )}
-
-      {isManager && <PayrollPanel role={me!.role} />}
     </div>
   )
 }
