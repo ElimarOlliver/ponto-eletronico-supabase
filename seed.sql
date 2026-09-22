@@ -52,8 +52,17 @@ DROP TABLE IF EXISTS seed_users;
 -- TEMP TABLE deliberadamente SEM "ON COMMIT DROP": o SQL Editor pode
 -- auto-commitar statement a statement; a tabela precisa sobreviver
 -- até o fim do script. Limpeza explícita no final.
-CREATE TEMP TABLE seed_users AS
-SELECT * FROM (VALUES
+-- role é DECLARADA como public.user_role de propósito: com CREATE ... AS,
+-- o engine infere text e os UPDATE/INSERT em profiles.role (enum) e
+-- user_companies.role_in_company (enum) falham com 42804.
+CREATE TEMP TABLE seed_users (
+  email     text,
+  full_name text,
+  cnpj      text,
+  role      public.user_role
+);
+
+INSERT INTO seed_users (email, full_name, cnpj, role) VALUES
   ('edenilza@pordosol2.com.br', 'Edenilza', '66782325000181', 'employee'),
   ('mayara@pordosol2.com.br',   'Mayara',   '66782325000181', 'employee'),
   ('deusiane@pordosol2.com.br', 'Deusiane', '66782325000181', 'employee'),
@@ -65,8 +74,7 @@ SELECT * FROM (VALUES
   ('jessica@acropolis.com.br',  'Jessica',  '58102941000116', 'employee'),
   ('admin@teste.com',           'Administrador', '00000000000000', 'company_admin'),
   ('gestor@teste.com',          'Gestor',        '00000000000000', 'manager'),
-  ('colab@teste.com',           'Colaborador',   '00000000000000', 'employee')
-) AS t(email, full_name, cnpj, role);
+  ('colab@teste.com',           'Colaborador',   '00000000000000', 'employee');
 
 -- ---------- 2) auth.users (upsert por e-mail) ----------
 DO $$
