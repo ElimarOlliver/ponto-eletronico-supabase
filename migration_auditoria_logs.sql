@@ -334,7 +334,7 @@ AS $$
 DECLARE
   v_role text;
 BEGIN
-  SELECT role INTO v_role FROM public.profiles WHERE id = auth.uid();
+  SELECT p.role INTO v_role FROM public.profiles p WHERE p.id = auth.uid();
 
   IF NOT (
     v_role IN ('system_admin', 'admin')
