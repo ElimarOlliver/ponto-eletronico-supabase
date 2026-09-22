@@ -2,7 +2,10 @@
 -- SEED — Usuários e empresas de teste (senha padrão: Senha123!)
 -- ============================================================
 -- Rode DEPOIS de migration_multi_company.sql, no SQL Editor.
--- Idempotente: upsert por e-mail (índice parcial users_email_partial_key).
+--
+-- Sem NENHUM "ON CONFLICT": todos os upserts usam loops plpgsql com
+-- EXISTS -> UPDATE/INSERT. Imune ao erro 42P10 (falta de constraint única
+-- não importa — o script resolve a existência manualmente).
 --
 -- Contas:
 --   Drogarias Por do Sol 2 LTDA (66782325000181)
@@ -19,35 +22,7 @@
 --   Linhas com instance_id NULL ficam INVISÍVEIS para o GoTrue (login 400).
 -- ============================================================
 
--- PRIMEIRO STATEMENT do script (auto-reparo, idempotente):
--- garante a UNIQUE (user_id, company_id) em user_companies ANTES de qualquer
--- upsert. Se a tabela já existia sem a PK (run parcial/anterior), este bloco
--- adiciona a constraint e os ON CONFLICT do script passam a funcionar.
-DO $$
-BEGIN
-  IF to_regclass('public.user_companies') IS NOT NULL
-     AND NOT EXISTS (
-       SELECT 1 FROM pg_constraint
-       WHERE conname = 'user_companies_pkey'
-         AND conrelid = 'public.user_companies'::regclass
-     )
-  THEN
-    DELETE FROM public.user_companies a
-    USING public.user_companies b
-    WHERE a.ctid > b.ctid
-      AND a.user_id IS NOT DISTINCT FROM b.user_id
-      AND a.company_id IS NOT DISTINCT FROM b.company_id;
-
-    ALTER TABLE public.user_companies
-      ADD CONSTRAINT user_companies_pkey PRIMARY KEY (user_id, company_id);
-  END IF;
-END $$;
-
--- ---------- 0) Empresas (upsert por cnpj SEM depender de constraint única) ----------
--- Implementado em plpgsql de propósito: o banco real pode não ter UNIQUE em
--- companies.cnpj (a migration_auditoria adiciona a coluna sem a constraint), e
--- nesse caso ON CONFLICT (cnpj) falharia com 42P10 em TODO run. Este loop
--- atualiza/insere sem exigir nenhuma constraint.
+-- ---------- 0) Empresas (upsert por cnpj) ----------
 DO $$
 DECLARE
   r record;
@@ -59,8 +34,8 @@ BEGIN
   ) AS v(cnpj, nome, ativa) LOOP
     IF EXISTS (SELECT 1 FROM public.companies WHERE cnpj = r.cnpj) THEN
       UPDATE public.companies
-        SET nome = r.nome, ativa = true
-      WHERE cnpj = r.cnpj;
+         SET nome = r.nome, ativa = true
+       WHERE cnpj = r.cnpj;
     ELSE
       INSERT INTO public.companies (cnpj, nome, ativa)
       VALUES (r.cnpj, r.nome, r.ativa);
@@ -88,90 +63,166 @@ SELECT * FROM (VALUES
   ('colab@teste.com',           'Colaborador',   '00000000000000', 'employee')
 ) AS t(email, full_name, cnpj, role);
 
--- ---------- 2) auth.users ----------
-INSERT INTO auth.users (
-  instance_id, id, aud, role, email, encrypted_password,
-  email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
-  created_at, updated_at, confirmation_token, email_change,
-  email_change_token_new, recovery_token
-)
-SELECT
-  '00000000-0000-0000-0000-000000000000',
-  gen_random_uuid(),
-  'authenticated', 'authenticated',
-  su.email,
-  extensions.crypt('Senha123!', extensions.gen_salt('bf')),
-  now(),
-  jsonb_build_object('provider','email','providers', jsonb_build_array('email')),
-  jsonb_build_object(
-    'sub',       su.email,
-    'email',     su.email,
-    'full_name', su.full_name,
-    'cnpj',      su.cnpj,
-    'company_id', c.id::text,
-    'role',      su.role
-  ),
-  now(), now(), '', '', '', ''
-FROM seed_users su
-JOIN public.companies c ON c.cnpj = su.cnpj
-ON CONFLICT (email) WHERE deleted_at IS NULL
-DO UPDATE SET
-  encrypted_password    = EXCLUDED.encrypted_password,
-  email_confirmed_at    = now(),
-  instance_id           = EXCLUDED.instance_id,
-  aud                   = EXCLUDED.aud,
-  role                  = EXCLUDED.role,
-  raw_app_meta_data     = EXCLUDED.raw_app_meta_data,
-  raw_user_meta_data    = EXCLUDED.raw_user_meta_data,
-  updated_at            = now();
+-- ---------- 2) auth.users (upsert por e-mail) ----------
+DO $$
+DECLARE
+  r     record;
+  v_uid uuid;
+BEGIN
+  FOR r IN SELECT * FROM seed_users LOOP
+    SELECT id INTO v_uid FROM auth.users WHERE email = r.email AND deleted_at IS NULL;
+
+    IF v_uid IS NULL THEN
+      INSERT INTO auth.users (
+        instance_id, id, aud, role, email, encrypted_password,
+        email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+        created_at, updated_at, confirmation_token, email_change,
+        email_change_token_new, recovery_token
+      ) VALUES (
+        '00000000-0000-0000-0000-000000000000',
+        gen_random_uuid(),
+        'authenticated', 'authenticated',
+        r.email,
+        extensions.crypt('Senha123!', extensions.gen_salt('bf')),
+        now(),
+        jsonb_build_object('provider','email','providers', jsonb_build_array('email')),
+        jsonb_build_object(
+          'sub', r.email, 'email', r.email, 'full_name', r.full_name,
+          'cnpj', r.cnpj,
+          'company_id', (SELECT id FROM public.companies WHERE cnpj = r.cnpj)::text,
+          'role', r.role
+        ),
+        now(), now(), '', '', '', ''
+      );
+    ELSE
+      UPDATE auth.users SET
+        encrypted_password    = extensions.crypt('Senha123!', extensions.gen_salt('bf')),
+        email_confirmed_at    = now(),
+        instance_id           = '00000000-0000-0000-0000-000000000000',
+        aud                   = 'authenticated',
+        role                  = 'authenticated',
+        raw_app_meta_data     = jsonb_build_object('provider','email','providers', jsonb_build_array('email')),
+        raw_user_meta_data    = jsonb_build_object(
+          'sub', r.email, 'email', r.email, 'full_name', r.full_name,
+          'cnpj', r.cnpj,
+          'company_id', (SELECT id FROM public.companies WHERE cnpj = r.cnpj)::text,
+          'role', r.role
+        ),
+        updated_at            = now()
+      WHERE id = v_uid;
+    END IF;
+  END LOOP;
+END $$;
 
 -- ---------- 3) auth.identities (login por e-mail/senha exige identity) ----------
-INSERT INTO auth.identities (
-  id, user_id, provider_id, identity_data, provider,
-  last_sign_in_at, created_at, updated_at
-)
-SELECT
-  u.id,
-  u.id,
-  u.email,
-  jsonb_build_object(
-    'sub', u.id::text, 'email', u.email,
-    'email_verified', false, 'phone_verified', false
-  ),
-  'email',
-  now(), now(), now()
-FROM auth.users u
-JOIN seed_users su ON su.email = u.email
-ON CONFLICT DO NOTHING;
+-- provider_id do GoTrue p/ login email = e-mail; PK é (provider, id=user_id).
+DO $$
+DECLARE
+  r record;
+  v_uid uuid;
+  v_exist boolean;
+BEGIN
+  FOR r IN SELECT su.email, u.id FROM seed_users su
+           JOIN auth.users u ON u.email = su.email AND u.deleted_at IS NULL LOOP
+    SELECT EXISTS (
+      SELECT 1 FROM auth.identities i
+      WHERE i.provider = 'email'
+        AND (i.provider_id = r.email OR i.id = r.id)
+    ) INTO v_exist;
+
+    IF NOT v_exist THEN
+      INSERT INTO auth.identities (
+        id, user_id, provider_id, identity_data, provider,
+        last_sign_in_at, created_at, updated_at
+      ) VALUES (
+        r.id, r.id, r.email,
+        jsonb_build_object(
+          'sub', r.id::text, 'email', r.email,
+          'email_verified', false, 'phone_verified', false
+        ),
+        'email', now(), now(), now()
+      );
+    END IF;
+  END LOOP;
+END $$;
 
 -- ---------- 4) public.profiles (role + empresa padrão) ----------
-INSERT INTO public.profiles (id, full_name, role, company_id)
-SELECT u.id, su.full_name, su.role, c.id
-FROM seed_users su
-JOIN auth.users u ON u.email = su.email
-JOIN public.companies c ON c.cnpj = su.cnpj
-ON CONFLICT (id) DO UPDATE SET
-  full_name  = EXCLUDED.full_name,
-  role       = EXCLUDED.role,
-  company_id = EXCLUDED.company_id;
+DO $$
+DECLARE
+  r record;
+  v_uid   uuid;
+  v_cid   uuid;
+  v_exist boolean;
+BEGIN
+  FOR r IN SELECT su.email, su.full_name, su.role, u.id, c.id AS company_id
+           FROM seed_users su
+           JOIN auth.users u  ON u.email = su.email AND u.deleted_at IS NULL
+           JOIN public.companies c ON c.cnpj = su.cnpj LOOP
+    SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = r.id) INTO v_exist;
+    IF v_exist THEN
+      UPDATE public.profiles
+         SET full_name = r.full_name, role = r.role, company_id = r.company_id
+       WHERE id = r.id;
+    ELSE
+      INSERT INTO public.profiles (id, full_name, role, company_id)
+      VALUES (r.id, r.full_name, r.role, r.company_id);
+    END IF;
+  END LOOP;
+END $$;
 
 -- ---------- 5) user_companies (vínculo completo, multi-empresa) ----------
 -- Empresa primária (padrão) de cada um:
-INSERT INTO public.user_companies (user_id, company_id, role_in_company)
-SELECT u.id, c.id, su.role
-FROM seed_users su
-JOIN auth.users u ON u.email = su.email
-JOIN public.companies c ON c.cnpj = su.cnpj
-ON CONFLICT (user_id, company_id) DO UPDATE SET role_in_company = EXCLUDED.role_in_company;
+DO $$
+DECLARE
+  r record;
+  v_exist boolean;
+BEGIN
+  FOR r IN SELECT u.id, c.id AS company_id, su.role
+           FROM seed_users su
+           JOIN auth.users u  ON u.email = su.email AND u.deleted_at IS NULL
+           JOIN public.companies c ON c.cnpj = su.cnpj LOOP
+    SELECT EXISTS (
+      SELECT 1 FROM public.user_companies
+      WHERE user_id = r.id AND company_id = r.company_id
+    ) INTO v_exist;
+    IF v_exist THEN
+      UPDATE public.user_companies SET role_in_company = r.role
+       WHERE user_id = r.id AND company_id = r.company_id;
+    ELSE
+      INSERT INTO public.user_companies (user_id, company_id, role_in_company)
+      VALUES (r.id, r.company_id, r.role);
+    END IF;
+  END LOOP;
+END $$;
 
 -- Milena e José também vinculados à ACROPOLIS (mesmo login, 2 CNPJs):
-INSERT INTO public.user_companies (user_id, company_id, role_in_company)
-SELECT u.id, c.id, 'company_admin'
-FROM seed_users su
-JOIN auth.users u ON u.email = su.email
-JOIN public.companies c ON c.cnpj = '58102941000116'
-WHERE su.email IN ('milena@pordosol.com.br', 'jose@pordosol.com.br')
-ON CONFLICT (user_id, company_id) DO UPDATE SET role_in_company = EXCLUDED.role_in_company;
+DO $$
+DECLARE
+  r record;
+  v_acropolis uuid;
+  v_exist boolean;
+BEGIN
+  SELECT id INTO v_acropolis FROM public.companies WHERE cnpj = '58102941000116';
+  IF v_acropolis IS NULL THEN
+    RAISE EXCEPTION 'Empresa Acropolis não encontrada (rode a seção de empresas antes)';
+  END IF;
+
+  FOR r IN SELECT u.id FROM seed_users su
+           JOIN auth.users u ON u.email = su.email AND u.deleted_at IS NULL
+           WHERE su.email IN ('milena@pordosol.com.br', 'jose@pordosol.com.br') LOOP
+    SELECT EXISTS (
+      SELECT 1 FROM public.user_companies
+      WHERE user_id = r.id AND company_id = v_acropolis
+    ) INTO v_exist;
+    IF v_exist THEN
+      UPDATE public.user_companies SET role_in_company = 'company_admin'
+       WHERE user_id = r.id AND company_id = v_acropolis;
+    ELSE
+      INSERT INTO public.user_companies (user_id, company_id, role_in_company)
+      VALUES (r.id, v_acropolis, 'company_admin');
+    END IF;
+  END LOOP;
+END $$;
 
 -- ---------- 6) Prova ----------
 SELECT
