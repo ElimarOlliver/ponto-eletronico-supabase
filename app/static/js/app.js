@@ -121,7 +121,14 @@
     try {
       const { data, error } = await supa.auth.signInWithPassword({ email, password });
       if (error) {
-        showLoginError(error.message);
+        // 500 = Auth fora do ar (nunca é "senha errada"): mensagem orientadora.
+        const status = Number((error && (error.status || error.code)) || 0);
+        if (status >= 500) {
+          showLoginError('Servidor de autenticação indisponível no momento. Tente novamente em instantes.');
+          return;
+        }
+        const msg = error && error.message ? String(error.message) : '';
+        showLoginError(msg || 'Falha no login. Confira e-mail/senha e tente novamente.');
         return;
       }
       if (!data.session) {
