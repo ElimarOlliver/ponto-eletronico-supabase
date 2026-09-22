@@ -19,6 +19,30 @@
 --   Linhas com instance_id NULL ficam INVISÍVEIS para o GoTrue (login 400).
 -- ============================================================
 
+-- PRIMEIRO STATEMENT do script (auto-reparo, idempotente):
+-- garante a UNIQUE (user_id, company_id) em user_companies ANTES de qualquer
+-- upsert. Se a tabela já existia sem a PK (run parcial/anterior), este bloco
+-- adiciona a constraint e os ON CONFLICT do script passam a funcionar.
+DO $$
+BEGIN
+  IF to_regclass('public.user_companies') IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM pg_constraint
+       WHERE conname = 'user_companies_pkey'
+         AND conrelid = 'public.user_companies'::regclass
+     )
+  THEN
+    DELETE FROM public.user_companies a
+    USING public.user_companies b
+    WHERE a.ctid > b.ctid
+      AND a.user_id IS NOT DISTINCT FROM b.user_id
+      AND a.company_id IS NOT DISTINCT FROM b.company_id;
+
+    ALTER TABLE public.user_companies
+      ADD CONSTRAINT user_companies_pkey PRIMARY KEY (user_id, company_id);
+  END IF;
+END $$;
+
 -- ---------- 0) Empresas (upsert p/ nomes canônicos) ----------
 INSERT INTO public.companies (cnpj, nome, ativa) VALUES
   ('66782325000181','Drogarias Por do Sol 2 LTDA', true),

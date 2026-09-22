@@ -24,6 +24,29 @@ CREATE TABLE IF NOT EXISTS public.user_companies (
 CREATE INDEX IF NOT EXISTS idx_uc_company ON public.user_companies (company_id);
 CREATE INDEX IF NOT EXISTS idx_uc_user    ON public.user_companies (user_id);
 
+-- Garante UNIQUE (user_id, company_id) MESMO se a tabela já existia sem PK
+-- (ex.: criada por versão anterior da migração ou por run parcial).
+-- Sem essa constraint, os upserts do seed.sql (ON CONFLICT (user_id, company_id))
+-- falham com 42P10 "no unique or exclusion constraint matching the ON CONFLICT".
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'user_companies_pkey'
+      AND conrelid = 'public.user_companies'::regclass
+  ) THEN
+    -- Remove eventuais duplicatas (mantém a menor ctid) antes da PK
+    DELETE FROM public.user_companies a
+    USING public.user_companies b
+    WHERE a.ctid > b.ctid
+      AND a.user_id IS NOT DISTINCT FROM b.user_id
+      AND a.company_id IS NOT DISTINCT FROM b.company_id;
+
+    ALTER TABLE public.user_companies
+      ADD CONSTRAINT user_companies_pkey PRIMARY KEY (user_id, company_id);
+  END IF;
+END $$;
+
 -- ---------- 2) Helpers (SECURITY DEFINER, mesmo padrão do schema) ----------
 CREATE OR REPLACE FUNCTION public.my_companies()
 RETURNS SETOF uuid
