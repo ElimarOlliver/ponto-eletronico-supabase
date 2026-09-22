@@ -11,7 +11,7 @@ venv/
 .idea/
 .DS_Store
 
-# Env
+# Env (segredos)
 .env
 .env.*
 
@@ -19,8 +19,16 @@ venv/
 dist/
 build/
 
-# Node (se usar algo futuramente)
+# Node (raiz, se um dia houver)
 node_modules/
 
 # Logs
 *.log
+
+# Frontend React (web/)
+web/node_modules/
+web/dist/
+
+# Ferramentas
+.pytest_cache/
+Thumbs.db

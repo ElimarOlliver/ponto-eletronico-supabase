@@ -1,11 +1,13 @@
 # Ponto Eletrônico — SaaS Multi-tenant (FastAPI + Supabase)
 
-Registro de ponto com geolocalização, gestão de equipe e feriados.
-Stack: **FastAPI (Python)** + **Supabase (Auth + Postgres + RLS)** + **Tailwind/Leaflet**.
+Registro de ponto com geolocalização, gestão de equipe, feriados e folha.
+Stack: **FastAPI (Python)** + **Supabase (Auth + Postgres + RLS)** + **Frontend React 19 (TypeScript + Tailwind v4 + Leaflet)**.
 
-> Login por **CNPJ + E-mail + Senha**. Dados isolados por empresa (`company_id` + RLS).
-> Backend valida o JWT (local via JWKS, fallback server) e confere o header
-> `X-Tenant-CNPJ` contra a empresa do profile em toda request.
+> Login por **E-mail + Senha** (a empresa é resolvida no backend, nunca no cliente).
+> Dados isolados por empresa (`company_id` + RLS). Gestores multi-empresa
+> (ex.: donos de 2 farmácias) alternam o CNPJ ativo via seletor no cabeçalho,
+> sem relogin — o backend valida a associação (`user_companies`) e troca o
+> escopo por request através do header `X-Company-ID`.
 
 ## 1) Setup do Supabase
 
@@ -14,19 +16,27 @@ Stack: **FastAPI (Python)** + **Supabase (Auth + Postgres + RLS)** + **Tailwind/
    (idempotente; inclui tenants, RLS, triggers e feriados).
    Se `ALTER TYPE ... ADD VALUE` reclamar de transação, rode as 2 linhas do topo
    separadamente primeiro.
-3. Em **Project Settings → API**, copie (formato novo ou legado — ambos funcionam):
+3. (Opcional, para multi-empresa) rode [`migration_multi_company.sql`](./migration_multi_company.sql)
+   e depois [`seed.sql`](./seed.sql) — cria `user_companies` e as contas de teste
+   com senha `Senha123!`.
+4. Em **Project Settings → API**, copie (formato novo ou legado — ambos funcionam):
    - `Project URL` → `SUPABASE_URL`
    - `sb_publishable_` (ou `anon`) → `SUPABASE_PUBLISHABLE_KEY` (ou `SUPABASE_ANON_KEY`)
-   - `sb_secret_` (ou `service_role`, só p/ sync de feriados) → `SUPABASE_SECRET_KEY`
+   - `sb_secret_` (ou `service_role`) → `SUPABASE_SECRET_KEY`
+     (obrigatória para alternar de empresa — o backend usa service key no modo switched)
 
 ### Tabelas & RLS
 - **companies**: tenants (`cnpj` único só-dígitos, `nome`, `ativa`).
 - **profiles**: `role` (`system_admin|company_admin|manager|employee`, legado `admin`
-  equivale a `company_admin`), `manager_id`, `company_id` NOT NULL.
+  equivale a `company_admin`), `manager_id`, `company_id` NOT NULL (empresa padrão).
+- **user_companies**: associação `(user_id, company_id, role_in_company)` — todas as
+  empresas do usuário. O backend resolve a empresa **ativa** por request e filtra
+  explicitamente por ela no modo alternado.
 - **punches**: ponto com lat/lon, `company_id` preenchido por trigger, anti-duplicação
   (mesmo tipo em 5 min + lock), auditoria em `punch_audit`.
 - **holidays**: `company_id NULL` = nacional (BrasilAPI, via sync); NOT NULL = local
   da empresa (ex: DF 30/11).
+- **payroll_closings**: snapshot por empresa/período gerado no fechamento da folha.
 - Hierarquia: `system_admin` (plataforma) > `company_admin` (empresa) > `manager` > `employee`.
 
 ## 2) Rodar localmente
@@ -39,21 +49,50 @@ uvicorn app.main:app --reload
 ```
 Acesse: <http://localhost:8000> · Health: `GET /api/health`
 
-Seed de teste (2 empresas, CNPJs válidos p/ checksum do form):
-```sql
-INSERT INTO companies (cnpj, nome) VALUES
- ('11222333000181','Empresa A Teste'),
- ('04252011000110','Empresa B Teste')
-ON CONFLICT (cnpj) DO NOTHING;
+### Frontend React (`web/`)
+O FastAPI serve o build em `/` quando `web/dist/index.html` existe (fallback:
+template Jinja2 legado). A config pública do Supabase vem de
+`GET /api/config` (URL + chave `anon` — pública por design).
+
+```powershell
+cd web
+npm install          # apenas na 1ª vez
+npm run build        # gera web/dist → acesse http://localhost:8000
+npm run dev          # (opcional) Vite dev em :5173 com proxy /api → :8000
 ```
-Crie os usuários em **Authentication → Add user** e vincule:
-```sql
-UPDATE profiles SET company_id=(SELECT id FROM companies WHERE cnpj='11222333000181'),
-  role='company_admin' WHERE id='<UUID_A>';
-UPDATE profiles SET company_id=(SELECT id FROM companies WHERE cnpj='04252011000110'),
-  role='employee' WHERE id='<UUID_B>';
-```
-Isolamento: login cruzado (`CNPJ A` + usuário B) deve dar 403.
+
+- Login por e-mail/senha (tenant resolvido **no backend**).
+- `AuthContext` restaura a sessão, carrega `/api/me` e valida a empresa ativa
+  salva (se o vínculo sumir, volta para a empresa padrão — sem relogin).
+- Troca de empresa grava `localStorage` + header `X-Company-ID` por request.
+- Operador: hero relógio + 4 botões + métricas + hoje/semana (sem edição).
+- Gestor: equipe (aprovar/recusar, editar horário/obs), feriados (sync
+  BrasilAPI + local), folha de ponto com impressão (só o espelho sai no papel)
+  e fechamento de período (admin).
+- Impressão: `Ctrl+P` com `@media print` isolando o card `#payroll-card`.
+
+Seed de teste (rodar `seed.sql` — idempotente):
+- Drogarias Por do Sol 2 LTDA (`66782325000181`):
+  - **Milena** `milena@pordosol.com.br` e **José** `jose@pordosol.com.br` →
+    `company_admin` nas **duas** farmácias (multi-empresa, sem relogin);
+    Edenilza, Mayara, Deusiane, Pablo → `employee`.
+- Drogarias ... Jardim Acropolis LTDA (`58102941000116`):
+  - Tamara, Lorena, Jessica → `employee`.
+- Senha de **todos**: `Senha123!`.
+
+> ⚠️ Contas criadas via SQL precisam de `instance_id = '00000000-0000-0000-0000-000000000000'`
+> em `auth.users` para o GoTrue enxergá-las (o seed já faz isso).
+
+Regras por perfil:
+- **employee (Operador)**: tela mínima — nome, cargo, 4 botões
+  (Entrada · Saída Almoço/Intervalo · Retorno Almoço/Intervalo · Saída Final),
+  registros de hoje e histórico simples da semana. **Sem nenhuma edição.**
+- **manager/company_admin (Gestor)**: equipe completa, editar horário/nota de
+  batidas, aprovar/rejeitar justificativas, fechar folha antes do PDF.
+- **Multi-empresa**: gestores com mais de um vínculo veem o seletor no cabeçalho;
+  o backend valida `user_companies` e troca o escopo via `X-Company-ID`.
+
+Isolamento: header `X-Company-ID` de empresa fora do `user_companies` do usuário dá 403.
 
 ## 3) Feriados (BrasilAPI, grátis, sem token)
 
@@ -65,7 +104,7 @@ service/secret key). Locais (ex: `2026-11-30` Dia do Evangélico DF): form
 ## 4) Variáveis de ambiente
 - `SUPABASE_URL` (obrigatória)
 - `SUPABASE_ANON_KEY` ou `SUPABASE_PUBLISHABLE_KEY` (obrigatória, legado tem prioridade)
-- `SUPABASE_SERVICE_ROLE_KEY` ou `SUPABASE_SECRET_KEY` (opcional; sync de feriados)
+- `SUPABASE_SERVICE_ROLE_KEY` ou `SUPABASE_SECRET_KEY` (obrigatória p/ alternar de empresa e sync de feriados)
 - `SUPABASE_JWKS_URL` (opcional; default `{URL}/auth/v1/.well-known/jwks.json`)
 - `TZ=America/Sao_Paulo`
 
@@ -79,10 +118,20 @@ service/secret key). Locais (ex: `2026-11-30` Dia do Evangélico DF): form
 ## 6) Estrutura
 ```
 app/
-  main.py            # API + middleware de tenant + feriados
-  templates/index.html
-  static/js/app.js   # login CNPJ, anti-XSS, equipe, feriados
-supabase.sql         # schema SaaS (tenants, RLS, triggers, holidays)
+  main.py            # API + middleware de tenant + feriados + serve do build React
+  templates/index.html   # fallback legado (Jinja2) se web/dist não existir
+  static/js/app.js       # (legado)
+web/                        # Frontend React (Vite + TypeScript + Tailwind v4 + Leaflet)
+  src/
+    components/             # Header, LoginCard, PunchCard, WeekMetrics, PunchLists,
+                            # PunchMap, TeamPanel, HolidaysPanel, PayrollPanel, Dashboard
+    state/AuthContext.tsx   # sessão + empresa ativa (X-Company-ID) sem relogin
+    lib/                    # supabase.ts (client via /api/config) + api.ts + utils.ts
+    types.ts                # tipos 1:1 com as respostas da API
+  dist/                     # build servido em / (gerado por `npm run build`)
+supabase.sql                      # schema SaaS (tenants, RLS, triggers, holidays)
+migration_multi_company.sql       # user_companies + helpers + RLS (multi-empresa)
+seed.sql                          # contas de teste (Senha123!) + multi-empresa
 requirements.txt
 .env.example
 ```

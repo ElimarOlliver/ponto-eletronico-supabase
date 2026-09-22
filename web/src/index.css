@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans:
+    "Inter", "system-ui", "-apple-system", "Segoe UI", "sans-serif";
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background-color: var(--color-slate-50);
+  color: var(--color-slate-900);
+}
+
+/* Scrollbar discreta */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Botões de marcação desabilitados durante envio */
+.btn-punch:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Leaflet dentro dos cards */
+.leaflet-container {
+  border-radius: 0.75rem;
+  z-index: 0;
+}
+
+/* Impressão: só o espelho da folha sai no papel */
+@media print {
+  html,
+  body {
+    background: #fff !important;
+    color: #0f172a !important;
+  }
+  header,
+  footer,
+  .print\:hidden,
+  [class*='print:hidden'] {
+    display: none !important;
+  }
+  main {
+    max-width: 100% !important;
+    padding: 0.5rem !important;
+  }
+  #payroll-card {
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+  #payroll-card .print\:hidden {
+    display: none !important;
+  }
+}
