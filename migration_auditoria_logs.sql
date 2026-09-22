@@ -11,7 +11,9 @@
 --
 -- O QUE FAZ:
 --   1) Helper público is_member_company(): enxerga user_companies (multi-empresa)
---      com fallback para a empresa padrão (funciona antes E depois da migração multi-company).
+--      com fallback para a empresa padrão. Implementado em plpgsql (relations
+--      resolvidos em runtime) — este arquivo roda ANTES ou DEPOIS da migração
+--      multi-company sem erro de "relation does not exist".
 --   2) Tabela logs_auditoria: quem alterou (e-mail + role), quem foi alterado,
 --      valor antigo/novo (jsonb), justificativa, empresa, data/hora.
 --   3) RLS de logs_auditoria (SELECT só para admin da empresa/gestor da empresa/
@@ -58,22 +60,33 @@ ALTER TABLE public.punches
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.is_member_company(p_uid uuid, p_company uuid)
 RETURNS boolean
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  SELECT
-    CASE
-      WHEN to_regclass('public.user_companies') IS NOT NULL THEN
-        EXISTS (SELECT 1 FROM public.user_companies uc
-                WHERE uc.user_id = p_uid AND uc.company_id = p_company)
-        OR EXISTS (SELECT 1 FROM public.profiles p
+DECLARE
+  v_member boolean;
+BEGIN
+  -- Fallback p/ single-company: se a tabela user_companies ainda não existe
+  -- (migração multi-company não aplicada), valida pelo vínculo padrão em
+  -- profiles.company_id. plpgsql resolve os relations em RUNTIME, então este
+  -- arquivo roda em qualquer ordem (diferente de LANGUAGE sql, que valida no
+  -- CREATE e quebrava com "relation user_companies does not exist").
+  IF to_regclass('public.user_companies') IS NOT NULL THEN
+    SELECT
+      EXISTS (SELECT 1 FROM public.user_companies uc
+              WHERE uc.user_id = p_uid AND uc.company_id = p_company)
+      OR EXISTS (SELECT 1 FROM public.profiles p
+                 WHERE p.id = p_uid AND p.company_id = p_company)
+      INTO v_member;
+  ELSE
+    SELECT EXISTS (SELECT 1 FROM public.profiles p
                    WHERE p.id = p_uid AND p.company_id = p_company)
-      ELSE
-        EXISTS (SELECT 1 FROM public.profiles p
-                WHERE p.id = p_uid AND p.company_id = p_company)
-    END;
+      INTO v_member;
+  END IF;
+  RETURN v_member;
+END;
 $$;
 
 -- ---------------------------------------------------------------------------
