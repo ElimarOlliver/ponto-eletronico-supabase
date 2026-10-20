@@ -50,6 +50,17 @@ export function UserIcon({ className }: IconProps) {
   ))
 }
 
+export function UserPlusIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <path d="M15 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="8.5" cy="7" r="4" />
+      <path d="M19 8v6" />
+      <path d="M22 11h-6" />
+    </>
+  ))
+}
+
 export function ZapIcon({ className }: IconProps) {
   return base(className, <path d="M13 2L4.8 12.7c-.3.4 0 .9.5.9H11l-1.4 7.6c-.1.7.8 1.1 1.2.4L19 10.9c.3-.4 0-.9-.5-.9H13l.9-7.3c.1-.6-.6-1-1-.7z" />)
 }
@@ -166,6 +177,104 @@ export function ShieldIcon({ className }: IconProps) {
     <>
       <path d="M12 2l8 3.5v5.5c0 5-3.4 8.8-8 10.5-4.6-1.7-8-5.5-8-10.5V5.5z" />
       <path d="M9 12l2 2 4-4" />
+    </>
+  ))
+}
+
+export function JsonIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <path d="M8 3H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1" />
+      <path d="M16 3h1a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-1" />
+    </>
+  ))
+}
+
+export function PdfIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6" />
+      <path d="M9 15h1.5a1.5 1.5 0 0 0 0-3H9v6" />
+      <path d="M14 18v-6h1.5a1.5 1.5 0 0 1 1.5 1.5v3A1.5 1.5 0 0 1 15.5 18z" />
+    </>
+  ))
+}
+
+export function ArrowLeftIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <path d="M19 12H5" />
+      <path d="M12 19l-7-7 7-7" />
+    </>
+  ))
+}
+
+export function ArrowRightIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <path d="M5 12h14" />
+      <path d="M12 5l7 7-7 7" />
+    </>
+  ))
+}
+
+export function MapPinIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z" />
+      <circle cx="12" cy="10" r="3" />
+    </>
+  ))
+}
+
+export function StoreIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <path d="M3 9l1.5-5h15L21 9" />
+      <path d="M3 9a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" />
+      <path d="M5 12v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8" />
+      <path d="M9 21v-5h6v5" />
+    </>
+  ))
+}
+
+export function AlertIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </>
+  ))
+}
+
+export function PowerIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+      <path d="M12 2v10" />
+    </>
+  ))
+}
+
+export function UserXIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M17 8l5 5" />
+      <path d="M22 8l-5 5" />
+    </>
+  ))
+}
+
+export function UserCheckIcon({ className }: IconProps) {
+  return base(className, (
+    <>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M16 11l2 2 4-4" />
     </>
   ))
 }
