@@ -20,6 +20,14 @@
 -- PONTO CRÍTICO (aprendido na prática):
 --   auth.users.instance_id DEVE ser '00000000-0000-0000-0000-000000000000'.
 --   Linhas com instance_id NULL ficam INVISÍVEIS para o GoTrue (login 400).
+--
+-- PONTO CRÍTICO (bug corrigido):
+--   A lista de usuários era uma TABELA TEMPORÁRIA (TEMP). O SQL Editor do
+--   Supabase pode executar cada statement numa conexão diferente do pool,
+--   e tabela TEMP só vive na sessão que a criou -> erro
+--   42P01: relation "seed_users" does not exist.
+--   Agora usa uma tabela REAL (public.seed_users_scratch), criada no início
+--   e apagada no fim do script.
 -- ============================================================
 
 -- ---------- 0) Empresas (upsert por cnpj) ----------
@@ -44,25 +52,27 @@ BEGIN
 END $$;
 
 -- ---------- 1) Lista de usuários do seed ----------
--- DROP prévio: se um run anterior falhou antes da limpeza e a sessão do SQL
--- Editor for reutilizada, o CREATE falharia com "relation seed_users already
--- exists" (42P06). O DROP final (seção 7) continua existindo.
-DROP TABLE IF EXISTS seed_users;
+-- ATENÇÃO (bug corrigido): esta lista era uma TABELA TEMPORÁRIA (TEMP).
+-- O SQL Editor do Supabase pode rodar cada statement numa CONEXÃO
+-- DIFERENTE (pool de conexões). Tabela TEMP só existe na sessão que a
+-- criou — então os blocos seguintes falhavam com
+--   42P01: relation "seed_users" does not exist
+-- Agora é uma tabela REAL (schema public), que atravessa statements e
+-- sessões. É criada, usada e apagada no fim do script.
+-- DROP prévio: idempotência se um run anterior falhou antes da limpeza.
+DROP TABLE IF EXISTS public.seed_users_scratch;
 
--- TEMP TABLE deliberadamente SEM "ON COMMIT DROP": o SQL Editor pode
--- auto-commitar statement a statement; a tabela precisa sobreviver
--- até o fim do script. Limpeza explícita no final.
 -- role é DECLARADA como public.user_role de propósito: com CREATE ... AS,
 -- o engine infere text e os UPDATE/INSERT em profiles.role (enum) e
 -- user_companies.role_in_company (enum) falham com 42804.
-CREATE TEMP TABLE seed_users (
+CREATE TABLE public.seed_users_scratch (
   email     text,
   full_name text,
   cnpj      text,
   role      public.user_role
 );
 
-INSERT INTO seed_users (email, full_name, cnpj, role) VALUES
+INSERT INTO public.seed_users_scratch (email, full_name, cnpj, role) VALUES
   ('edenilza@pordosol2.com.br', 'Edenilza', '66782325000181', 'employee'),
   ('mayara@pordosol2.com.br',   'Mayara',   '66782325000181', 'employee'),
   ('deusiane@pordosol2.com.br', 'Deusiane', '66782325000181', 'employee'),
@@ -82,7 +92,7 @@ DECLARE
   r     record;
   v_uid uuid;
 BEGIN
-  FOR r IN SELECT * FROM seed_users LOOP
+  FOR r IN SELECT * FROM public.seed_users_scratch LOOP
     SELECT id INTO v_uid FROM auth.users WHERE email = r.email AND deleted_at IS NULL;
 
     IF v_uid IS NULL THEN
@@ -135,7 +145,7 @@ DECLARE
   v_uid uuid;
   v_exist boolean;
 BEGIN
-  FOR r IN SELECT su.email, u.id FROM seed_users su
+  FOR r IN SELECT su.email, u.id FROM public.seed_users_scratch su
            JOIN auth.users u ON u.email = su.email AND u.deleted_at IS NULL LOOP
     SELECT EXISTS (
       SELECT 1 FROM auth.identities i
@@ -168,7 +178,7 @@ DECLARE
   v_exist boolean;
 BEGIN
   FOR r IN SELECT su.email, su.full_name, su.role, u.id, c.id AS company_id
-           FROM seed_users su
+           FROM public.seed_users_scratch su
            JOIN auth.users u  ON u.email = su.email AND u.deleted_at IS NULL
            JOIN public.companies c ON c.cnpj = su.cnpj LOOP
     SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = r.id) INTO v_exist;
@@ -191,7 +201,7 @@ DECLARE
   v_exist boolean;
 BEGIN
   FOR r IN SELECT u.id, c.id AS company_id, su.role
-           FROM seed_users su
+           FROM public.seed_users_scratch su
            JOIN auth.users u  ON u.email = su.email AND u.deleted_at IS NULL
            JOIN public.companies c ON c.cnpj = su.cnpj LOOP
     SELECT EXISTS (
@@ -220,7 +230,7 @@ BEGIN
     RAISE EXCEPTION 'Empresa Acropolis não encontrada (rode a seção de empresas antes)';
   END IF;
 
-  FOR r IN SELECT u.id FROM seed_users su
+  FOR r IN SELECT u.id FROM public.seed_users_scratch su
            JOIN auth.users u ON u.email = su.email AND u.deleted_at IS NULL
            WHERE su.email IN ('milena@pordosol.com.br', 'jose@pordosol.com.br') LOOP
     SELECT EXISTS (
@@ -245,7 +255,7 @@ SELECT
   c.nome                     AS empresa_padrao,
   count(uc.company_id)       AS n_empresas,
   array_agg(cc.nome ORDER BY cc.nome) AS empresas
-FROM seed_users su
+FROM public.seed_users_scratch su
 JOIN auth.users u ON u.email = su.email
 JOIN public.profiles p ON p.id = u.id
 JOIN public.companies c ON c.id = p.company_id
@@ -255,4 +265,4 @@ GROUP BY su.email, p.full_name, p.role, c.nome
 ORDER BY su.email;
 
 -- ---------- 7) Limpeza ----------
-DROP TABLE IF EXISTS seed_users;
+DROP TABLE IF EXISTS public.seed_users_scratch;

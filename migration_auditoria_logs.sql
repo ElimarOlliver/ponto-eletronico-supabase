@@ -219,6 +219,13 @@ BEGIN
     RAISE EXCEPTION 'Sem permissão para alterar este ponto (perfil/empresa)';
   END IF;
 
+  -- REGRA DE OURO (legalidade): justificativa obrigatória (mín. 10 caracteres).
+  -- Bloqueia até chamada direta via service_role: não existe alteração de ponto
+  -- sem justificativa gravada no log. A mensagem é genérica de propósito.
+  IF p_justificativa IS NULL OR length(btrim(p_justificativa)) < 10 THEN
+    RAISE EXCEPTION 'Justificativa obrigatória (mínimo de 10 caracteres)';
+  END IF;
+
   SELECT * INTO v_old FROM public.punches WHERE id = p_punch_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Ponto não encontrado';
@@ -249,7 +256,7 @@ BEGIN
     (v_new.id, v_new.company_id, p_actor_id, v_email, v_role,
      v_new.user_id, v_user_name, 'update',
      to_jsonb(v_old), to_jsonb(v_new),
-     COALESCE(NULLIF(p_justificativa, ''), 'Correção de ponto'));
+     btrim(p_justificativa));
 
   RETURN to_jsonb(v_new);
 END;
@@ -283,6 +290,11 @@ BEGIN
     RAISE EXCEPTION 'Sem permissão para avaliar este ponto (perfil/empresa)';
   END IF;
 
+  -- REGRA DE OURO (legalidade): justificativa obrigatória (mín. 10 caracteres).
+  IF p_justificativa IS NULL OR length(btrim(p_justificativa)) < 10 THEN
+    RAISE EXCEPTION 'Justificativa obrigatória (mínimo de 10 caracteres)';
+  END IF;
+
   SELECT * INTO v_old FROM public.punches WHERE id = p_punch_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Ponto não encontrado';
@@ -312,7 +324,7 @@ BEGIN
     (v_new.id, v_new.company_id, p_actor_id, v_email, v_role,
      v_new.user_id, v_user_name, CASE WHEN p_decision = 'approved' THEN 'approve' ELSE 'reject' END,
      to_jsonb(v_old), to_jsonb(v_new),
-     COALESCE(NULLIF(p_justificativa, ''), CASE WHEN p_decision = 'approved' THEN 'Aprovação de marcação' ELSE 'Recusa de marcação' END));
+     btrim(p_justificativa));
 
   RETURN to_jsonb(v_new);
 END;
