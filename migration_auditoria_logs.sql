@@ -147,6 +147,35 @@ USING (
 -- service_role (app/back-end) continua livre; RLS não se aplica a ele.
 
 -- ---------------------------------------------------------------------------
+-- 4.0) Resolve o ATOR REAL da auditoria (anti-spoofing).
+-- ---------------------------------------------------------------------------
+-- O backend (service_role) já envia o id correto, derivado do JWT validado.
+-- Mas um usuário autenticado pode chamar estas RPCs direto no PostgREST
+-- (GRANT ... TO authenticated) forjando p_actor_id de outra pessoa.
+-- Regra: se houver sessão de usuário (auth.uid() NÃO nulo), o ator informado
+-- DEVE ser o próprio auth.uid(); só no contexto service_role (auth.uid() nulo)
+-- o p_actor_id informado é aceito — e o backend garante esse caminho.
+CREATE OR REPLACE FUNCTION public.audit_actor(p_actor_id uuid)
+RETURNS uuid
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_uid uuid := auth.uid();
+BEGIN
+  IF v_uid IS NOT NULL THEN
+    IF p_actor_id IS DISTINCT FROM v_uid THEN
+      RAISE EXCEPTION 'Sem permissão: ator de auditoria não corresponde à sessão';
+    END IF;
+    RETURN v_uid;
+  END IF;
+  RETURN p_actor_id;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- 4) Autorização de edição de ponto (compatível com multi-empresa)
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.can_edit_punch(p_actor uuid, p_punch_id bigint)
@@ -213,9 +242,13 @@ DECLARE
   v_role text;
   v_email text;
   v_user_name text;
+  v_actor uuid;
 BEGIN
+  -- Anti-spoofing: resolve o ator real (sessão do usuário manda sobre o param).
+  v_actor := public.audit_actor(p_actor_id);
+
   -- Autorização (idempotente à RLS: roda como dono da função)
-  IF NOT public.can_edit_punch(p_actor_id, p_punch_id) THEN
+  IF NOT public.can_edit_punch(v_actor, p_punch_id) THEN
     RAISE EXCEPTION 'Sem permissão para alterar este ponto (perfil/empresa)';
   END IF;
 
@@ -234,7 +267,7 @@ BEGIN
   UPDATE public.punches SET
     occurred_at = COALESCE(p_occurred_at, v_old.occurred_at),
     note        = CASE WHEN p_note IS NOT NULL THEN NULLIF(p_note, '') ELSE v_old.note END,
-    edited_by   = p_actor_id,
+    edited_by   = v_actor,
     edited_at   = now()
   WHERE id = p_punch_id
   RETURNING * INTO v_new;
@@ -244,7 +277,7 @@ BEGIN
   -- (sem alias -> 42702 "column reference role is ambiguous" em runtime).
   SELECT pr.role::text, u.email INTO v_role, v_email
   FROM public.profiles pr JOIN auth.users u ON u.id = pr.id
-  WHERE pr.id = p_actor_id;
+  WHERE pr.id = v_actor;
 
   SELECT full_name INTO v_user_name FROM public.profiles WHERE id = v_new.user_id;
 
@@ -253,7 +286,7 @@ BEGIN
      usuario_alterado, usuario_alterado_nome, acao,
      valor_antigo, valor_novo, justificativa)
   VALUES
-    (v_new.id, v_new.company_id, p_actor_id, v_email, v_role,
+    (v_new.id, v_new.company_id, v_actor, v_email, v_role,
      v_new.user_id, v_user_name, 'update',
      to_jsonb(v_old), to_jsonb(v_new),
      btrim(p_justificativa));
@@ -281,12 +314,16 @@ DECLARE
   v_role text;
   v_email text;
   v_user_name text;
+  v_actor uuid;
 BEGIN
   IF p_decision NOT IN ('approved', 'rejected') THEN
     RAISE EXCEPTION 'Decisão inválida';
   END IF;
 
-  IF NOT public.can_edit_punch(p_actor_id, p_punch_id) THEN
+  -- Anti-spoofing: resolve o ator real (sessão do usuário manda sobre o param).
+  v_actor := public.audit_actor(p_actor_id);
+
+  IF NOT public.can_edit_punch(v_actor, p_punch_id) THEN
     RAISE EXCEPTION 'Sem permissão para avaliar este ponto (perfil/empresa)';
   END IF;
 
@@ -302,9 +339,9 @@ BEGIN
 
   UPDATE public.punches SET
     approval_status = p_decision::public.punch_approval_status,
-    approved_by     = p_actor_id,
+    approved_by     = v_actor,
     approved_at     = now(),
-    edited_by       = p_actor_id,
+    edited_by       = v_actor,
     edited_at       = now()
   WHERE id = p_punch_id
   RETURNING * INTO v_new;
@@ -312,7 +349,7 @@ BEGIN
   -- 'role' existe em profiles E em auth.users — qualificar (evita 42702).
   SELECT pr.role::text, u.email INTO v_role, v_email
   FROM public.profiles pr JOIN auth.users u ON u.id = pr.id
-  WHERE pr.id = p_actor_id;
+  WHERE pr.id = v_actor;
 
   SELECT full_name INTO v_user_name FROM public.profiles WHERE id = v_new.user_id;
 
@@ -321,7 +358,7 @@ BEGIN
      usuario_alterado, usuario_alterado_nome, acao,
      valor_antigo, valor_novo, justificativa)
   VALUES
-    (v_new.id, v_new.company_id, p_actor_id, v_email, v_role,
+    (v_new.id, v_new.company_id, v_actor, v_email, v_role,
      v_new.user_id, v_user_name, CASE WHEN p_decision = 'approved' THEN 'approve' ELSE 'reject' END,
      to_jsonb(v_old), to_jsonb(v_new),
      btrim(p_justificativa));

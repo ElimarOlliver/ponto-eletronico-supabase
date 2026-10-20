@@ -185,15 +185,14 @@ r = make_client({"id": MGR, "full_name": "Milena", "role": "manager", "company_i
 check("gestor com company_id alheia -> 403", r.status_code == 403)
 check("gestor: nada criado no auth", adm.created == [])
 
-print("== 4) Admin escolhe qualquer empresa ==")
+print("== 4) company_admin NÃO cadastra em outra empresa ==")
 adm = FakeAdmin()
 r = make_client({"id": ADM, "full_name": "Admin", "role": "company_admin", "company_id": "c1"}, adm).post(
     "/api/admin/employees", json={**BODY, "company_id": "c2"}
 )
-check("admin em c2 -> 200", r.status_code == 200)
-if adm.rpc_calls:
-    check("admin: empresa = c2 (escolhida)", adm.rpc_calls[0][1]["p_company_id"] == "c2")
-    check("admin: manager_id nulo", adm.rpc_calls[0][1]["p_manager_id"] is None)
+check("company_admin em c2 -> 403", r.status_code == 403)
+check("company_admin: nada criado no auth", adm.created == [])
+check("company_admin: nenhuma RPC chamada", adm.rpc_calls == [])
 
 print("== 5) system_admin: todas as empresas ==")
 adm = FakeAdmin()
