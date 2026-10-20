@@ -973,6 +973,12 @@ def api_admin_create_employee(
         company_id = payload.company_id or _company_scope(me) or me.get("company_id")
         if not company_id:
             raise HTTPException(status_code=400, detail="Informe a empresa do funcionário")
+        # company_admin (admin de empresa) só cadastra na PRÓPRIA empresa.
+        # Apenas o admin de plataforma (system_admin) escolhe empresa alheia.
+        if role not in SYSTEM_ADMIN_ROLES:
+            own = _company_scope(me) or me.get("company_id")
+            if not own or str(company_id) != str(own):
+                raise HTTPException(status_code=403, detail="Admin só cadastra na própria empresa")
 
     # manager_id: gestor -> ele mesmo; admin -> o informado (ou nulo).
     if is_manager and not is_admin:
@@ -1072,6 +1078,10 @@ def api_my_punches(
     limit = max(1, min(limit, 100))
     try:
         q = sb.table("punches").select("*")
+        # Escopo OBRIGATÓRIO por usuário: em modo alternado o client usa a
+        # service key (sem RLS); sem este filtro a rota devolveria as batidas
+        # de toda a empresa. O company_id é defesa em profundidade.
+        q = q.eq("user_id", me["id"])
         cs = _company_scope(me)
         if cs:
             q = q.eq("company_id", cs)
@@ -1266,9 +1276,11 @@ def _get_punch_or_403(sb: Client, punch_id: int, me: dict) -> dict:
         row = None
     if not row:
         raise HTTPException(status_code=404, detail="Punch não encontrado ou sem permissão")
+    # Isolamento por empresa SEM exceção de papel: o modo alternado usa a
+    # service key (RLS fora), então este filtro em Python é a única barreira.
+    # system_admin também precisa declarar a empresa (X-Company-ID) para agir.
     if (
-        me.get("role") not in ("system_admin", "admin")
-        and me.get("company_id")
+        me.get("company_id")
         and row.get("company_id")
         and row.get("company_id") != me.get("company_id")
     ):
@@ -2754,7 +2766,7 @@ def _report_targets(sb: Client, me: dict, user_id: Optional[str], cnpj: Optional
             raise HTTPException(status_code=404, detail="Colaborador não encontrado")
         if role == "manager" and t.get("manager_id") != me["id"]:
             raise HTTPException(status_code=403, detail="Colaborador não pertence à sua equipe")
-        if role in COMPANY_ADMIN_ROLES and not SYSTEM_ADMIN_ROLES:
+        if role in COMPANY_ADMIN_ROLES and role not in SYSTEM_ADMIN_ROLES:
             if company_id and t.get("company_id") != company_id:
                 raise HTTPException(status_code=403, detail="Colaborador fora da sua empresa")
         return [t]
@@ -2797,22 +2809,24 @@ def _fmt_cnpj(digits: Optional[str]) -> str:
     return f"{d[:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:]}"
 
 
-def _employee_contract(sb: Client, target_id: str) -> dict:
+def _employee_contract(sb: Client, target_id: str, company_id: Optional[str] = None) -> dict:
     """Busca os dados cadastrais do empregado para o cabeçalho do espelho.
 
     Tolerante à ausência das colunas (migração_espelho_mte não aplicada):
     retorna o que existir; o restante vira travessão.
+    Quando company_id é informado, a consulta é escopada por empresa
+    (defesa em profundidade no modo alternado, onde o client é service key).
     """
     base = {"full_name": None, "cpf": None, "pis": None, "ctps": None, "cargo": None, "data_admissao": None}
     try:
-        row = (
+        q = (
             sb.table("profiles")
             .select("id,full_name,role,cpf,pis,ctps,cargo,data_admissao")
             .eq("id", target_id)
-            .limit(1)
-            .execute()
-            .data
         )
+        if company_id:
+            q = q.eq("company_id", company_id)
+        row = q.limit(1).execute().data
         if isinstance(row, list):
             row = row[0] if row else None
         if isinstance(row, dict):
@@ -2820,14 +2834,10 @@ def _employee_contract(sb: Client, target_id: str) -> dict:
     except Exception:
         # Colunas ainda não existem: tenta só o essencial.
         try:
-            row = (
-                sb.table("profiles")
-                .select("id,full_name,role")
-                .eq("id", target_id)
-                .limit(1)
-                .execute()
-                .data
-            )
+            q = sb.table("profiles").select("id,full_name,role").eq("id", target_id)
+            if company_id:
+                q = q.eq("company_id", company_id)
+            row = q.limit(1).execute().data
             if isinstance(row, list):
                 row = row[0] if row else None
             if isinstance(row, dict):
@@ -3030,7 +3040,7 @@ def _build_report(sb: Client, me: dict, start_d: date, end_d: date, targets: lis
         for k in agg:
             agg[k] += int(totals.get(k, 0) or 0)
         days_worked = sum(1 for d in sheet["days"] if d["worked_min"] > 0)
-        contract = _employee_contract(sb, t["id"])
+        contract = _employee_contract(sb, t["id"], cs or t.get("company_id"))
         ch = _contract_schedule(sb, t["id"], start_d)
         emp = {
             "user_id": t["id"],

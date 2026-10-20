@@ -332,6 +332,7 @@ test_relatorio_fechamento.py      # testes do relatório (faltas, contagens, PDF
 test_relatorio_endpoints.py       # testes dos endpoints + hierarquia de acesso
 test_espelho_mte.py               # testes do Espelho MTE (Anexo II Portaria 1510)
 test_cadastro_funcionario.py      # testes do cadastro (hierarquia + rollback)
+test_multi_tenant_scope.py        # testes de isolamento entre empresas (escopo multi-tenant)
 test_soft_delete.py               # testes de Ativar/Desativar (cascata + bloqueios)
 requirements.txt
 .env.example

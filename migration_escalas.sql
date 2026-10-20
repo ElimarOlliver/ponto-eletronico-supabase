@@ -52,7 +52,7 @@ AS $$ SELECT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = uid AND p.role
 
 CREATE OR REPLACE FUNCTION public.is_company_admin(uid uuid)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
-AS $$ SELECT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = uid AND p.role IN ('company_admin', 'system_admin')); $$;
+AS $$ SELECT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = uid AND p.role IN ('admin', 'company_admin', 'system_admin')); $$;
 
 CREATE OR REPLACE FUNCTION public.is_manager_of(manager uuid, employee uuid)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
