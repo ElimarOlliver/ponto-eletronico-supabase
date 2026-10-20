@@ -17,6 +17,7 @@ import TeamPanel from './TeamPanel'
 import AdminPanel from './AdminPanel'
 import HolidaysPanel from './HolidaysPanel'
 import PayrollPanel from './PayrollPanel'
+import ClosingReportPanel from './ClosingReportPanel'
 
 // *DASHBOARD*
 // Operador: hero + métricas + listas (mínimo).
@@ -107,40 +108,53 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <PunchCard
-        todayPunches={todayPunches}
-        punching={punching}
-        onPunch={doPunch}
-        readOnly={isPlatformAdmin}
-      />
-
-      {isPlatformAdmin ? (
-        <AdminPanel />
+      {!me ? (
+        // Perfil ainda carregando (/api/me): evita ler me.role com null.
+        <div className="flex min-h-[40vh] items-center justify-center">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-blue-950/15 border-t-blue-950" />
+        </div>
       ) : (
         <>
-          {punchMsg && (
-            <div
-              className={`rounded-2xl border px-4 py-3 text-sm font-semibold shadow-sm ${
-                punchMsg.startsWith('✓')
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                  : 'border-rose-200 bg-rose-50 text-rose-700'
-              }`}
-            >
-              {punchMsg}
-            </div>
-          )}
+          <PunchCard
+            todayPunches={todayPunches}
+            punching={punching}
+            onPunch={doPunch}
+            readOnly={isPlatformAdmin}
+          />
 
-          <WeekMetrics totals={totals} loading={loading} />
-          <PunchLists punches={punches} week={week} loading={loading} />
-
-          {isManager && (
+          {isPlatformAdmin ? (
+            <AdminPanel />
+          ) : (
             <>
-              <TeamPanel />
-              <HolidaysPanel isAdmin={isAdmin} />
+              {punchMsg && (
+                <div
+                  className={`rounded-2xl border px-4 py-3 text-sm font-semibold shadow-sm ${
+                    punchMsg.startsWith('✓')
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                      : 'border-rose-200 bg-rose-50 text-rose-700'
+                  }`}
+                >
+                  {punchMsg}
+                </div>
+              )}
+
+              <WeekMetrics totals={totals} loading={loading} />
+              <PunchLists punches={punches} week={week} loading={loading} />
+
+              {isManager && (
+                <>
+                  <TeamPanel />
+                  <HolidaysPanel isAdmin={isAdmin} />
+                </>
+              )}
+
+              {isManager && <PayrollPanel role={me.role} />}
+
+              {/* Relatório de fechamento (PDF/JSON): todos os perfis, cada um
+                  no seu escopo — funcionário vê só o próprio mês. */}
+              <ClosingReportPanel role={me.role} />
             </>
           )}
-
-          {isManager && <PayrollPanel role={me!.role} />}
         </>
       )}
     </div>

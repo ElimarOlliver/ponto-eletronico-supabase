@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useAuth } from '../state/AuthContext'
 import { api } from '../lib/api'
-import { ClockIcon, EyeIcon } from './icons'
+import { EyeIcon } from './icons'
 
 // *LOGIN*
 // E-mail/senha (tenant resolvido no backend). Fluxo de redefinição
@@ -52,8 +52,8 @@ export default function LoginCard() {
       <div className="w-full max-w-md">
         <div className="overflow-hidden rounded-3xl border border-white/60 bg-white/80 shadow-2xl shadow-blue-950/10 backdrop-blur-xl">
           <div className="bg-gradient-to-br from-blue-950 via-blue-900 to-blue-950 px-8 pb-10 pt-8 text-center">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 text-amber-400 ring-1 ring-white/15">
-              <ClockIcon className="h-7 w-7" />
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl bg-white/10 ring-1 ring-white/15">
+              <img src="/img/logo-pollar.png" alt="Pollar" className="h-full w-full object-contain" />
             </div>
             <h1 className="text-xl font-extrabold tracking-tight text-white">Ponto Eletrônico</h1>
             <p className="mt-1 text-sm font-medium text-blue-200">

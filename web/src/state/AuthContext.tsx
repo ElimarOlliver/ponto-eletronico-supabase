@@ -127,8 +127,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (e) {
         if (!cancelled) {
           // Perfil não carregado (vínculo removido/fallback): encerra a sessão.
+          // scope 'local' evita o 403 do /logout?scope=global com token expirado.
           const supabase = await getSupabase().catch(() => null)
-          await supabase?.auth.signOut().catch(() => null)
+          await supabase?.auth.signOut({ scope: 'local' }).catch(() => null)
           setStatus('anonymous')
           setSession(null)
           setMe(null)
@@ -171,11 +172,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const signOut = useCallback(async () => {
+    // scope: 'local' encerra SOMENTE a sessão deste navegador e não depende de
+    // um access token válido no servidor. O padrão do SDK é 'global', que
+    // chama /logout?scope=global e responde 403 quando o token expirou ou a
+    // sessão já não existe — o que aparecia como erro no console. Limpamos o
+    // estado local mesmo que a chamada ao Supabase falhe.
     try {
       const supabase = await getSupabase()
-      await supabase.auth.signOut()
+      // Mesmo se o servidor recusar (403), o SDK limpa a sessão local.
+      await supabase.auth.signOut({ scope: 'local' })
     } catch {
-      /* ignore */
+      /* ignore: a limpeza local abaixo garante o logout */
     }
     setStatus('anonymous')
     setSession(null)

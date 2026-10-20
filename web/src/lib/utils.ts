@@ -158,6 +158,9 @@ export function dayStatusBadge(day: TimesheetDay): { label: string; cls: string 
       return { label: 'Feriado', cls: 'bg-violet-50 text-violet-700 ring-violet-600/20' }
     case 'weekend':
       return { label: 'Folga', cls: 'bg-slate-100 text-slate-600 ring-slate-500/10' }
+    case 'off':
+      // Folga prevista pela escala (ex.: dia de descanso do 12x36).
+      return { label: 'Folga (escala)', cls: 'bg-slate-100 text-slate-600 ring-slate-500/10' }
     default:
       return { label: day.status, cls: 'bg-slate-100 text-slate-600 ring-slate-500/10' }
   }

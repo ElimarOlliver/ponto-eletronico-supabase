@@ -83,8 +83,8 @@ export default function TeamPanel() {
     )
     if (j === null) return null
     const clean = j.trim()
-    if (!clean) {
-      alert('A justificativa é obrigatória para registrar a alteração.')
+    if (clean.length < 10) {
+      alert('A justificativa é obrigatória (mínimo de 10 caracteres) para registrar a alteração.')
       return null
     }
     return clean.slice(0, 500)

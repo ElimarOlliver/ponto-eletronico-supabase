@@ -3,6 +3,8 @@ import { createClient } from '@supabase/supabase-js'
 // *CLIENT TYPES*
 // Implementação intencional: o cliente Supabase é criado somente após
 // /api/config (URL + chave anon pública) — mesma config do backend.
+// Opções explícitas: sessão persistida + refresh automático do token (evita
+// requests com access token expirado, causa de erros 401/403 intermitentes).
 
 let client: Awaited<ReturnType<typeof createClient>> | null = null
 
@@ -21,6 +23,13 @@ export async function getConfig(): Promise<{ supabase_url: string; supabase_anon
 export async function getSupabase() {
   if (client) return client
   const cfg = await getConfig()
-  client = createClient(cfg.supabase_url, cfg.supabase_anon_key)
+  client = createClient(cfg.supabase_url, cfg.supabase_anon_key, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      // Necessário para o fluxo de redefinição por link (hash na URL).
+      detectSessionInUrl: true,
+    },
+  })
   return client
 }

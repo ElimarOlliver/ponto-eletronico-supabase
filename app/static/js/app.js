@@ -746,16 +746,27 @@
       b.className = baseCls + cls;
       b.textContent = label;
       b.addEventListener('click', async () => {
+        // Regra de Ouro: TODA alteracao/ aprovacao exige justificativa (min. 10).
+        const pergunta = kind === 'approve' ? 'Aprovar marcacao'
+          : kind === 'reject' ? 'Recusar marcacao'
+          : kind === 'note' ? 'Alterar nota' : 'Alterar horario';
+        const jRaw = prompt(pergunta + ' - Justificativa obrigatoria (fica gravada no historico de auditoria):', '');
+        if (jRaw === null) return;
+        const justificativa = jRaw.trim();
+        if (justificativa.length < 10) {
+          alert('A justificativa e obrigatoria (minimo de 10 caracteres) para registrar a alteracao.');
+          return;
+        }
         if (kind === 'approve' || kind === 'reject') {
           const up = await authFetch('/api/punch-approve', {
-            method: 'POST', session, body: { id: p.id, decision: kind === 'approve' ? 'approved' : 'rejected' },
+            method: 'POST', session, body: { id: p.id, decision: kind === 'approve' ? 'approved' : 'rejected', justificativa },
           });
           if (!up.ok) { alert(await readError(up)); return; }
         } else if (kind === 'note') {
           const note = prompt('Nova nota (vazio apaga):', '');
           if (note === null) return;
           const up = await authFetch('/api/punch-update', {
-            method: 'POST', session, body: { id: p.id, note: note === '' ? null : note },
+            method: 'POST', session, body: { id: p.id, note: note === '' ? null : note, justificativa },
           });
           if (!up.ok) { alert(await readError(up)); return; }
         } else {
@@ -769,7 +780,7 @@
           const dt = new Date(val);
           if (Number.isNaN(dt.getTime())) { alert('Data/hora inválida.'); return; }
           const up = await authFetch('/api/punch-update', {
-            method: 'POST', session, body: { id: p.id, occurred_at: dt.toISOString() },
+            method: 'POST', session, body: { id: p.id, occurred_at: dt.toISOString(), justificativa },
           });
           if (!up.ok) { alert(await readError(up)); return; }
         }
