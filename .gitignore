@@ -1,34 +1,91 @@
-# Python
+# ============================================================
+# .gitignore — Ponto Eletrônico (multi-tenant)
+# ============================================================
+# REGRA DE OURO: NUNCA subir segredos nem dados locais do banco.
+# Ao repositório só vão: código-fonte e MIGRATIONS (.sql de ESTRUTURA).
+# Dados inseridos, dumps, .env e estado local do banco ficam de fora.
+# ============================================================
+
+# ---------- Segredos / ambiente ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets.json
+service-account*.json
+
+# ---------- Python ----------
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .venv/
 venv/
+env/
+.Python
+*.egg-info/
+pip-wheel-metadata/
 
-# IDE/OS
-.vscode/
-.idea/
-.DS_Store
-
-# Env (segredos)
-.env
-.env.*
-
-# Build/Cache
+# ---------- Node / Frontend ----------
+node_modules/
+web/node_modules/
+**/node_modules/
 dist/
 build/
-
-# Node (raiz, se um dia houver)
-node_modules/
-
-# Logs
-*.log
-
-# Frontend React (web/)
-web/node_modules/
+.next/
+out/
 web/dist/
+.vite/
+*.tsbuildinfo
 
-# Ferramentas
-.pytest_cache/
+# ---------- Dados locais do banco (NUNCA subir) ----------
+# Diretórios de dados do PostgreSQL rodando localmente
+pgdata/
+.postgres/
+postgres-data/
+pg_data/
+data/pg/
+# Dumps / backups (contêm dados reais — não sanitizados)
+*.dump
+*.pgdump
+*.backup
+*.bak
+*.sql.gz
+*.sql.bz2
+*.tar.gz
+dumps/
+backups/
+# Banco SQLite local
+*.sqlite
+*.sqlite3
+*.db
+
+# ---------- Logs ----------
+*.log
+logs/
+npm-debug.log*
+yarn-error.log*
+
+# ---------- IDE / OS ----------
+.vscode/
+.idea/
+*.swp
+.DS_Store
 Thumbs.db
+desktop.ini
+
+# ---------- Testes / cobertura ----------
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+
+# ---------- Temporários ----------
+*.tmp
+*.temp
+tmp/
+temp/
